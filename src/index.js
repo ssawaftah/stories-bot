@@ -103,6 +103,35 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
+    // ===== معالجة رابط المشاركة =====
+    if (text && text.startsWith('/start share_')) {
+      const contentId = text.replace('/start share_', '').trim();
+      
+      // التحقق من الموافقة
+      if (!approvedUsers[userId]) {
+        await sendMessage(chatId, '🔐 يجب الموافقة على طلبك أولاً.\nاضغط /start', token);
+        return;
+      }
+
+      // التحقق من الاشتراك الإجباري
+      const subscribed = await checkMandatorySubscription(userId, token);
+      if (!subscribed) {
+        await sendSubscriptionMessage(chatId, token);
+        return;
+      }
+
+      // عرض المحتوى
+      const item = contentSystem.items[contentId];
+      if (item) {
+        userState[userId] = { step: 'main' };
+        await sendContent(chatId, item, token);
+      } else {
+        await sendMessage(chatId, `❌ لا يوجد محتوى برقم ${contentId}`, token);
+        await showUserMainMenu(chatId, token);
+      }
+      return;
+    }
+
     if (text === '/start') {
       if (approvedUsers[userId]) {
         const subscribed = await checkMandatorySubscription(userId, token);
@@ -796,12 +825,9 @@ async function handleUserSearch(chatId, text, token, userId) {
 // ========== إرسال المحتوى للمستخدم ==========
 
 async function sendContent(chatId, item, token) {
-  // عنوان المحتوى فقط
   const title = item.title;
 
-  // إذا كان هناك وسائط متعددة
   if (item.mediaItems && item.mediaItems.length > 1) {
-    // إرسال أول وسيط مع العنوان
     const firstMedia = item.mediaItems[0];
     if (firstMedia.type === 'image') {
       await sendPhoto(chatId, firstMedia.fileId, title, token);
@@ -809,7 +835,6 @@ async function sendContent(chatId, item, token) {
       await sendVideo(chatId, firstMedia.fileId, title, token);
     }
     
-    // إرسال باقي الوسائط بدون عنوان (فقط المحتوى)
     for (let i = 1; i < item.mediaItems.length; i++) {
       const media = item.mediaItems[i];
       if (media.type === 'image') {
@@ -819,7 +844,6 @@ async function sendContent(chatId, item, token) {
       }
     }
   } 
-  // وسيط واحد
   else if (item.fileId && (item.type === 'video' || item.type === 'animation')) {
     await sendVideo(chatId, item.fileId, title, token);
   } else if (item.fileId && item.type === 'image') {
@@ -827,14 +851,12 @@ async function sendContent(chatId, item, token) {
   } else if (item.fileId && item.type === 'document') {
     await sendDocument(chatId, item.fileId, title, token);
   } else {
-    // نص عادي - إرسال العنوان والمحتوى بدون إضافات
     await sendMessage(chatId, 
       `${title}\n\n${item.content}`,
       token
     );
   }
 
-  // عرض زر البحث
   await sendMessage(chatId, '🔍 للبحث عن محتوى آخر:', token, {
     reply_markup: {
       keyboard: [
@@ -920,7 +942,7 @@ async function sendDocument(chatId, fileId, caption, token) {
 }
 
 // ====================================================================
-// ========== دوال إدارة المحتوى (للواجهة) ==========
+// ========== دوال إدارة المحتوى ==========
 // ====================================================================
 
 async function showContentManagement(chatId, token) {
@@ -1148,7 +1170,6 @@ async function showStatistics(chatId, token) {
 // ====================================================================
 
 async function handleAdminCallback(data, chatId, messageId, token) {
-  // ===== رجوع =====
   if (data === 'admin_back') {
     await showAdminMainMenu(chatId, token);
     return;
@@ -1164,7 +1185,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== إدارة الطلبات =====
   if (data === 'show_pending') {
     await showPendingRequests(chatId, token);
     return;
@@ -1180,7 +1200,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== حذف اشتراك =====
   if (data.startsWith('delete_sub_')) {
     const parts = data.split('_');
     const type = parts[2];
@@ -1203,7 +1222,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== حذف محتوى =====
   if (data.startsWith('delete_content_')) {
     const contentId = data.replace('delete_content_', '');
     
@@ -1217,7 +1235,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== تعديل محتوى =====
   if (data.startsWith('edit_content_')) {
     const contentId = data.replace('edit_content_', '');
     const item = contentSystem.items[contentId];
@@ -1244,7 +1261,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== قبول/رفض الطلبات =====
   if (data.startsWith('approve_')) {
     const targetId = data.split('_')[1];
     if (pendingUsers[targetId]) {
