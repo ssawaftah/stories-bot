@@ -1,5 +1,7 @@
 // معرف الأدمن - غيره إلى معرفك
 const ADMIN_IDS = ['6455001010'];
+// معرف الأدمن - غيره إلى معرفك
+
 
 export default {
   async fetch(request, env) {
