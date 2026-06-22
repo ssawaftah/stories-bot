@@ -1,0 +1,14 @@
+name = "niswangy-bot"
+main = "src/bot.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "NISWANGY_DB"
+id = "هنا-ID-KV-الخاص-بك"
+preview_id = "هنا-ID-KV-الخاص-بك"
+
+[vars]
+BOT_TOKEN = "هنا-توكن-البوت"
+ADMIN_ID = "هنا-ID-تيليجرام-الخاص-بك"
+CHANNEL_USERNAME = "@niswangy_channel"
+FORCE_SUBSCRIBE = "true"
