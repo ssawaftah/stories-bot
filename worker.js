@@ -1,5 +1,5 @@
 // ==================== إعدادات البوت ====================
-const ADMIN_IDS = ['ADMIN_ID_1', 'ADMIN_ID_2']; // ضع معرفات الأدمن هنا
+const ADMIN_IDS = ['6455001010', 'ADMIN_ID_2']; // ضع معرفات الأدمن هنا
 
 export default {
   async fetch(request, env) {
