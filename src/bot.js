@@ -426,7 +426,9 @@ router.get('/setup', async () => {
     await initDefaultCategories();
     
     const url = `https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`;
-    const webhookUrl = `https://niswangy-bot.${SUBDOMAIN}.workers.dev/webhook`;
+    const url = new URL(request.url);
+const hostname = url.hostname; // مثلاً niswangy-bot.username.workers.dev
+const webhookUrl = `https://${hostname}/webhook`;
     
     const response = await fetch(url, {
       method: 'POST',
