@@ -1,91 +1,90 @@
 export default {
   async fetch(request, env) {
+    // للزيارة المباشرة
+    if (request.method === 'GET') {
+      const hasToken = env.BOT_TOKEN ? '✅ موجود' : '❌ مفقود';
+      const hasAdmin = env.ADMIN_IDS ? '✅ موجود' : '❌ مفقود';
+      return new Response(`Bot Ready\nToken: ${hasToken}\nAdmin: ${hasAdmin}`);
+    }
+    
+    // لاستقبال تحديثات تيليجرام
     if (request.method === 'POST') {
       try {
         const update = await request.json();
         
         if (update.message) {
           const msg = update.message;
-          const chatId = msg.chat.id.toString();
+          const chatId = msg.chat.id;
           const text = msg.text || '';
           const contact = msg.contact;
           const adminIds = (env.ADMIN_IDS || '').split(',').map(id => id.trim());
-          const isAdmin = adminIds.includes(chatId);
+          const isAdmin = adminIds.includes(chatId.toString());
           
-          // ====== /start ======
+          // === /start ===
           if (text === '/start') {
-            // هل هو معتمد؟
-            const approved = await env.BOT_KV.get(`user:${chatId}`, { type: 'json' });
-            if (approved && approved.approved) {
-              return await sendMsg(env, chatId, '👋 مرحباً بعودتك ' + approved.name + '!');
+            // التحقق إذا كان معتمد
+            const user = await env.BOT_KV.get(`user:${chatId}`, { type: 'json' });
+            if (user && user.approved) {
+              return await this.sendTg(env, chatId, '👋 مرحباً ' + user.name + '!');
             }
             
-            // هل طلبه معلق؟
+            // التحقق إذا كان معلق
             const pending = await env.BOT_KV.get(`pending:${chatId}`, { type: 'json' });
             if (pending) {
-              return await sendMsg(env, chatId, '⏳ طلبك قيد المراجعة. انتظر الرد.');
+              return await this.sendTg(env, chatId, '⏳ طلبك قيد المراجعة.');
             }
             
             // طلب رقم الهاتف
-            return await sendMsg(env, chatId, 
-              '👋 مرحباً!\n\nللتحقق من هويتك، يرجى مشاركة رقم هاتفك.',
-              {
-                reply_markup: JSON.stringify({
-                  keyboard: [[{ text: '📱 مشاركة رقم الهاتف', request_contact: true }]],
-                  resize_keyboard: true,
-                  one_time_keyboard: true
-                })
+            return await this.sendTg(env, chatId, '👋 مرحباً!\nللتحقق من هويتك، شارك رقم هاتفك.', {
+              reply_markup: {
+                keyboard: [[{ text: '📱 مشاركة رقم الهاتف', request_contact: true }]],
+                resize_keyboard: true,
+                one_time_keyboard: true
               }
-            );
+            });
           }
           
-          // ====== استلام جهة الاتصال ======
+          // === استلام جهة الاتصال ===
           if (contact) {
             const phone = contact.phone_number;
-            const name = (contact.first_name || msg.from.first_name || '');
-            const lastName = contact.last_name || msg.from.last_name || '';
-            const fullName = (name + ' ' + lastName).trim();
+            const name = (contact.first_name || msg.from.first_name || '') + 
+                        ' ' + (contact.last_name || msg.from.last_name || '');
             
-            // حفظ الطلب المعلق
+            // حفظ الطلب
             const request = {
-              id: chatId,
-              name: fullName,
+              id: chatId.toString(),
+              name: name.trim(),
               phone: phone,
               date: new Date().toISOString()
             };
             
             await env.BOT_KV.put(`pending:${chatId}`, JSON.stringify(request));
             
-            // إضافة للقائمة
+            // تحديث القائمة
             let pendingList = await env.BOT_KV.get('pending_list', { type: 'json' }) || [];
-            if (!pendingList.includes(chatId)) {
-              pendingList.push(chatId);
+            if (!pendingList.includes(chatId.toString())) {
+              pendingList.push(chatId.toString());
               await env.BOT_KV.put('pending_list', JSON.stringify(pendingList));
             }
             
             // إشعار المستخدم
-            await sendMsg(env, chatId,
-              '📋 *تم استلام طلبك*\n\n' +
-              '📱 الرقم: ' + phone + '\n' +
-              '⏳ طلبك قيد المراجعة.',
-              { parse_mode: 'Markdown' }
-            );
+            await this.sendTg(env, chatId, '📋 تم استلام طلبك\n📱 ' + phone + '\n⏳ قيد المراجعة');
             
-            // إشعار الأدمن
+            // إشعار كل الأدمن
             for (const adminId of adminIds) {
-              await sendMsg(env, adminId,
-                '🔔 *طلب انضمام جديد*\n\n' +
-                '👤 ' + fullName + '\n' +
+              await this.sendTg(env, adminId, 
+                '🔔 *طلب جديد*\n\n' +
+                '👤 ' + name.trim() + '\n' +
                 '📱 ' + phone + '\n' +
                 '🆔 `' + chatId + '`',
                 {
                   parse_mode: 'Markdown',
-                  reply_markup: JSON.stringify({
+                  reply_markup: {
                     inline_keyboard: [[
-                      { text: '✅ قبول', callback_data: 'approve_' + chatId },
-                      { text: '❌ رفض', callback_data: 'reject_' + chatId }
+                      { text: '✅ قبول', callback_data: 'ok_' + chatId },
+                      { text: '❌ رفض', callback_data: 'no_' + chatId }
                     ]]
-                  })
+                  }
                 }
               );
             }
@@ -93,54 +92,52 @@ export default {
             return new Response('OK');
           }
           
-          // ====== admin ======
+          // === /admin ===
           if (text === '/admin') {
-            if (!isAdmin) return await sendMsg(env, chatId, '⛔ غير مصرح.');
+            if (!isAdmin) return await this.sendTg(env, chatId, '⛔ غير مصرح');
             
-            const pendingCount = (await env.BOT_KV.get('pending_list', { type: 'json' }) || []).length;
-            const usersCount = (await env.BOT_KV.get('users_list', { type: 'json' }) || []).length;
+            const pendingList = await env.BOT_KV.get('pending_list', { type: 'json' }) || [];
+            const usersList = await env.BOT_KV.get('users_list', { type: 'json' }) || [];
             
-            return await sendMsg(env, chatId,
-              '🎛 *لوحة التحكم*\n\n' +
-              '📋 طلبات معلقة: ' + pendingCount + '\n' +
-              '👥 مستخدمين: ' + usersCount,
+            return await this.sendTg(env, chatId, 
+              '🎛 *لوحة التحكم*\n\n📋 معلق: ' + pendingList.length + '\n👥 مستخدمين: ' + usersList.length,
               {
                 parse_mode: 'Markdown',
-                reply_markup: JSON.stringify({
+                reply_markup: {
                   inline_keyboard: [
                     [{ text: '📋 الطلبات المعلقة', callback_data: 'pending' }],
                     [{ text: '👥 المستخدمين', callback_data: 'users' }]
                   ]
-                })
+                }
               }
             );
           }
           
-          return await sendMsg(env, chatId, 'استخدم /start للبدء.');
+          return await this.sendTg(env, chatId, 'استخدم /start');
         }
         
-        // ====== الأزرار ======
+        // === الأزرار (callback) ===
         if (update.callback_query) {
           const cb = update.callback_query;
-          const chatId = cb.message.chat.id.toString();
+          const chatId = cb.message.chat.id;
           const data = cb.data;
           const msgId = cb.message.message_id;
           
-          // قبول مستخدم
-          if (data.startsWith('approve_')) {
-            const userId = data.replace('approve_', '');
-            const request = await env.BOT_KV.get(`pending:${userId}`, { type: 'json' });
+          // قبول
+          if (data.startsWith('ok_')) {
+            const userId = data.slice(3);
+            const req = await env.BOT_KV.get(`pending:${userId}`, { type: 'json' });
             
-            if (!request) {
-              await answerCb(env, cb.id, 'الطلب لم يعد موجوداً');
+            if (!req) {
+              await this.answerCb(env, cb.id, 'انتهى الطلب');
               return new Response('OK');
             }
             
-            // حفظ كمستخدم
+            // حفظ كمستخدم معتمد
             const user = {
               id: userId,
-              name: request.name,
-              phone: request.phone,
+              name: req.name,
+              phone: req.phone,
               join_date: Date.now(),
               approved: true,
               is_blocked: false
@@ -161,22 +158,22 @@ export default {
             await env.BOT_KV.put('pending_list', JSON.stringify(pendingList));
             
             // إشعار المستخدم
-            await sendMsg(env, userId, '✅ *تم قبول طلبك!*\n\nأهلاً بك في البوت.');
+            await this.sendTg(env, userId, '✅ *تم قبول طلبك!*\nأهلاً بك في البوت.', { parse_mode: 'Markdown' });
             
             // تحديث رسالة الأدمن
-            await editMsg(env, chatId, msgId, '✅ تم قبول: ' + request.name);
-            await answerCb(env, cb.id, 'تم القبول');
+            await this.editTg(env, chatId, msgId, '✅ تم قبول: ' + req.name);
+            await this.answerCb(env, cb.id, 'تم القبول ✓');
             
             return new Response('OK');
           }
           
-          // رفض مستخدم
-          if (data.startsWith('reject_')) {
-            const userId = data.replace('reject_', '');
-            const request = await env.BOT_KV.get(`pending:${userId}`, { type: 'json' });
+          // رفض
+          if (data.startsWith('no_')) {
+            const userId = data.slice(3);
+            const req = await env.BOT_KV.get(`pending:${userId}`, { type: 'json' });
             
-            if (!request) {
-              await answerCb(env, cb.id, 'الطلب لم يعد موجوداً');
+            if (!req) {
+              await this.answerCb(env, cb.id, 'انتهى الطلب');
               return new Response('OK');
             }
             
@@ -187,36 +184,33 @@ export default {
             await env.BOT_KV.put('pending_list', JSON.stringify(pendingList));
             
             // إشعار المستخدم
-            await sendMsg(env, userId, '❌ *تم رفض طلبك.*\n\nعذراً، لم يتم قبولك.');
+            await this.sendTg(env, userId, '❌ *تم رفض طلبك.*', { parse_mode: 'Markdown' });
             
             // تحديث رسالة الأدمن
-            await editMsg(env, chatId, msgId, '❌ تم رفض: ' + request.name);
-            await answerCb(env, cb.id, 'تم الرفض');
+            await this.editTg(env, chatId, msgId, '❌ تم رفض: ' + req.name);
+            await this.answerCb(env, cb.id, 'تم الرفض ✗');
             
             return new Response('OK');
           }
           
-          // عرض الطلبات المعلقة
+          // عرض المعلقين
           if (data === 'pending') {
             const pendingList = await env.BOT_KV.get('pending_list', { type: 'json' }) || [];
             
             if (pendingList.length === 0) {
-              await editMsg(env, chatId, msgId, '📋 لا توجد طلبات معلقة.');
-              await answerCb(env, cb.id, 'لا يوجد');
+              await this.editTg(env, chatId, msgId, '📋 لا توجد طلبات.');
+              await this.answerCb(env, cb.id, 'لا يوجد');
               return new Response('OK');
             }
             
-            let text = '📋 *الطلبات المعلقة*\n\n';
-            
+            let text = '📋 *معلق*\n\n';
             for (const uid of pendingList) {
-              const req = await env.BOT_KV.get(`pending:${uid}`, { type: 'json' });
-              if (req) {
-                text += '👤 ' + req.name + '\n📱 ' + req.phone + '\n➖➖➖\n';
-              }
+              const r = await env.BOT_KV.get(`pending:${uid}`, { type: 'json' });
+              if (r) text += '👤 ' + r.name + ' | 📱 ' + r.phone + '\n';
             }
             
-            await editMsg(env, chatId, msgId, text, { parse_mode: 'Markdown' });
-            await answerCb(env, cb.id, 'تم');
+            await this.editTg(env, chatId, msgId, text, { parse_mode: 'Markdown' });
+            await this.answerCb(env, cb.id, 'تم');
             return new Response('OK');
           }
           
@@ -225,26 +219,23 @@ export default {
             const usersList = await env.BOT_KV.get('users_list', { type: 'json' }) || [];
             
             if (usersList.length === 0) {
-              await editMsg(env, chatId, msgId, '👥 لا يوجد مستخدمين.');
-              await answerCb(env, cb.id, 'لا يوجد');
+              await this.editTg(env, chatId, msgId, '👥 لا يوجد مستخدمين.');
+              await this.answerCb(env, cb.id, 'لا يوجد');
               return new Response('OK');
             }
             
-            let text = '👥 *المستخدمين*\n\n';
-            
+            let text = '👥 *مستخدمين*\n\n';
             for (const uid of usersList.slice(0, 20)) {
               const u = await env.BOT_KV.get(`user:${uid}`, { type: 'json' });
-              if (u) {
-                text += '👤 ' + u.name + '\n📱 ' + u.phone + '\n🆔 `' + uid + '`\n➖➖➖\n';
-              }
+              if (u) text += '👤 ' + u.name + ' | 📱 ' + u.phone + '\n';
             }
             
-            await editMsg(env, chatId, msgId, text, { parse_mode: 'Markdown' });
-            await answerCb(env, cb.id, 'تم');
+            await this.editTg(env, chatId, msgId, text, { parse_mode: 'Markdown' });
+            await this.answerCb(env, cb.id, 'تم');
             return new Response('OK');
           }
           
-          await answerCb(env, cb.id, 'تم');
+          await this.answerCb(env, cb.id, 'تم');
         }
         
         return new Response('OK');
@@ -253,38 +244,33 @@ export default {
       }
     }
     
-    return new Response('Bot Online ✅');
+    return new Response('OK');
+  },
+  
+  // دوال مساعدة
+  async sendTg(env, chatId, text, extra = {}) {
+    const body = { chat_id: String(chatId), text: text, ...extra };
+    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  },
+  
+  async editTg(env, chatId, msgId, text, extra = {}) {
+    const body = { chat_id: String(chatId), message_id: msgId, text: text, ...extra };
+    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  },
+  
+  async answerCb(env, cbId, text) {
+    await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: cbId, text: text })
+    });
   }
 };
-
-// دوال مساعدة
-async function sendMsg(env, chatId, text, extra = {}) {
-  const body = { chat_id: chatId, text: text };
-  if (extra.parse_mode) body.parse_mode = extra.parse_mode;
-  if (extra.reply_markup) body.reply_markup = JSON.parse(extra.reply_markup);
-  
-  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-}
-
-async function editMsg(env, chatId, msgId, text, extra = {}) {
-  const body = { chat_id: chatId, message_id: msgId, text: text };
-  if (extra.parse_mode) body.parse_mode = extra.parse_mode;
-  
-  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/editMessageText`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-}
-
-async function answerCb(env, cbId, text) {
-  await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/answerCallbackQuery`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_query_id: cbId, text: text })
-  });
-}
