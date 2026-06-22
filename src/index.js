@@ -5,24 +5,17 @@ const approvedUsers = {};
 
 // ========== نظام إدارة الأقسام ==========
 const categories = {
-  // هيكل الأقسام
-  structure: {
-    // مثال: 'قصص': { type: 'folder', children: ['قصص مضحكة', 'قصص حزينة'] },
-    // مثال: 'معلومات': { type: 'direct', content: 'معلومات البوت...' }
-  },
-  // تخزين المحتوى للأقسام المباشرة
-  content: {
-    // 'قصص مضحكة': 'نص القصة...'
-  },
-  // ترتيب الأقسام
+  structure: {},
+  content: {},
   order: []
 };
 
 // ========== حالة الأدمن ==========
 const adminState = {
-  currentAction: null, // 'create_folder', 'create_direct', 'edit', 'delete'
+  currentAction: null,
   step: null,
-  tempData: {}
+  tempData: {},
+  editingTarget: null
 };
 
 export default {
@@ -75,48 +68,37 @@ async function handleTelegramUpdate(update, env) {
 
     // ========== واجهة الأدمن ==========
     if (userId.toString() === ADMIN_ID) {
-      // معالجة أوامر الأدمن
       if (text === '/start' || text === '/admin') {
         await showAdminMainMenu(chatId, token);
         return;
       }
 
-      // معالجة أزرار الأدمن
       await handleAdminActions(chatId, text, token);
       return;
     }
 
     // ========== واجهة المستخدم ==========
-    // التحقق من المرفوضين
     if (rejectedUsers[userId]) {
       return sendMessage(chatId, 
         '❌ عذراً، طلبك مرفوض.\nإذا كان لديك استفسار، تواصل مع الإدارة عبر @jahab',
         token,
-        {
-          reply_markup: { remove_keyboard: true }
-        }
+        { reply_markup: { remove_keyboard: true } }
       );
     }
 
-    // أمر /start للمستخدم
     if (text === '/start') {
-      // إذا كان معتمد
       if (approvedUsers[userId]) {
         return showUserMainMenu(chatId, token);
       }
 
-      // إذا كان في انتظار الموافقة
       if (pendingUsers[userId]) {
         return sendMessage(chatId, 
           '⏳ طلبك قيد المراجعة، يرجى الانتظار...',
           token,
-          {
-            reply_markup: { remove_keyboard: true }
-          }
+          { reply_markup: { remove_keyboard: true } }
         );
       }
 
-      // طلب رقم الهاتف
       return sendMessage(chatId,
         '🔐 للتحقق، شارك رقم هاتفك:',
         token,
@@ -133,7 +115,6 @@ async function handleTelegramUpdate(update, env) {
       );
     }
 
-    // استقبال رقم الهاتف
     if (msg.contact) {
       const contact = msg.contact;
       
@@ -158,9 +139,7 @@ async function handleTelegramUpdate(update, env) {
       await sendMessage(chatId, 
         '⏳ تم استلام طلبك! جاري التحقق من قبل الإدارة...',
         token,
-        {
-          reply_markup: { remove_keyboard: true }
-        }
+        { reply_markup: { remove_keyboard: true } }
       );
 
       const adminMsg = `
@@ -178,7 +157,6 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
-    // منع المستخدمين غير المعتمدين
     if (!approvedUsers[userId]) {
       if (rejectedUsers[userId]) {
         return sendMessage(chatId, '❌ طلبك مرفوض. للتواصل: @jahab', token, {
@@ -208,12 +186,10 @@ async function handleTelegramUpdate(update, env) {
       );
     }
 
-    // ========== معالجة اختيارات المستخدم ==========
     await handleUserSelection(chatId, text, token);
     return;
   }
 
-  // ========== معالجة أزرار الكولباك ==========
   if (update.callback_query) {
     const query = update.callback_query;
     const userId = query.from.id;
@@ -221,13 +197,11 @@ async function handleTelegramUpdate(update, env) {
     const chatId = query.message.chat.id;
     const messageId = query.message.message_id;
 
-    // التحقق من الأدمن
     if (userId.toString() === ADMIN_ID) {
       await handleAdminCallback(data, chatId, messageId, token);
       return answerCallbackQuery(query.id, '✅ تم', token);
     }
 
-    // معالجة كولباك المستخدم
     await handleUserCallback(data, chatId, token, userId);
     return answerCallbackQuery(query.id, '✅ تم', token);
   }
@@ -258,7 +232,8 @@ async function showAdminMainMenu(chatId, token) {
       keyboard: [
         ['📋 إدارة الطلبات', '📂 إدارة الأقسام'],
         ['📊 الإحصائيات', '⚙️ إعدادات البوت'],
-        ['📢 إرسال إشعار', '🔙 العودة للقائمة']
+        ['📢 إرسال إشعار', '🔄 تصدير/استيراد'],
+        ['🔙 العودة للقائمة']
       ],
       resize_keyboard: true
     }
@@ -290,12 +265,27 @@ async function handleAdminActions(chatId, text, token) {
       adminState.step = 'waiting_message';
       await sendMessage(chatId, 
         '📝 أرسل الرسالة التي تريد إرسالها لجميع المستخدمين:',
-        token
+        token,
+        { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
       );
+      break;
+      
+    case '🔄 تصدير/استيراد':
+      await showExportImport(chatId, token);
       break;
       
     case '🔙 العودة للقائمة':
     case 'رجوع':
+      adminState.currentAction = null;
+      adminState.step = null;
+      adminState.tempData = {};
+      await showAdminMainMenu(chatId, token);
+      break;
+      
+    case '🔙 إلغاء':
+      adminState.currentAction = null;
+      adminState.step = null;
+      adminState.tempData = {};
       await showAdminMainMenu(chatId, token);
       break;
       
@@ -305,6 +295,8 @@ async function handleAdminActions(chatId, text, token) {
         await handleCreateFolder(chatId, text, token);
       } else if (adminState.currentAction === 'create_direct') {
         await handleCreateDirect(chatId, text, token);
+      } else if (adminState.currentAction === 'edit_category') {
+        await handleEditCategory(chatId, text, token);
       } else if (adminState.currentAction === 'broadcast' && adminState.step === 'waiting_message') {
         await sendBroadcast(chatId, text, token);
         adminState.currentAction = null;
@@ -339,22 +331,33 @@ async function showRequestsManagement(chatId, token) {
   await sendMessage(chatId, message, token, keyboard);
 }
 
-// ========== إدارة الأقسام ==========
+// ========== إدارة الأقسام المتكاملة ==========
 
 async function showCategoriesManagement(chatId, token) {
-  const message = `
+  const folders = Object.keys(categories.structure).filter(
+    key => categories.structure[key].type === 'folder'
+  );
+  const directs = Object.keys(categories.structure).filter(
+    key => categories.structure[key].type === 'direct'
+  );
+
+  let message = `
 📂 إدارة الأقسام
+
+📊 الإحصائيات:
+• 📁 مجلدات: ${folders.length}
+• 📄 أقسام مباشرة: ${directs.length}
+• 📌 مجموع الأقسام: ${Object.keys(categories.structure).length}
 
 🔹 إنشاء قسم جديد:
 • 📁 مجلد جديد
 • 📄 قسم مباشر
 
-🔸 إدارة الأقسام الحالية:
+🔸 إدارة الأقسام:
 • ✏️ تعديل قسم
 • 🗑️ حذف قسم
 • 📊 ترتيب الأقسام
-
-اختر الإجراء:
+• 📋 نسخ قسم
   `;
 
   const keyboard = {
@@ -362,7 +365,8 @@ async function showCategoriesManagement(chatId, token) {
       keyboard: [
         ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
         ['✏️ تعديل قسم', '🗑️ حذف قسم'],
-        ['📊 ترتيب الأقسام', '🔙 العودة للقائمة']
+        ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+        ['🔙 العودة للقائمة']
       ],
       resize_keyboard: true
     }
@@ -391,16 +395,14 @@ async function handleCreateFolder(chatId, text, token) {
   }
 
   if (adminState.step === 'waiting_name') {
-    // التحقق من عدم وجود المجلد
     if (categories.structure[text]) {
       await sendMessage(chatId, 
-        '⚠️ هذا المجلد موجود بالفعل! الرجاء اختيار اسم آخر:',
+        '⚠️ هذا الاسم موجود بالفعل! الرجاء اختيار اسم آخر:',
         token
       );
       return;
     }
 
-    // إنشاء المجلد
     categories.structure[text] = {
       type: 'folder',
       children: [],
@@ -409,14 +411,15 @@ async function handleCreateFolder(chatId, text, token) {
     categories.order.push(text);
 
     await sendMessage(chatId, 
-      `✅ تم إنشاء المجلد "${text}" بنجاح!`,
+      `✅ تم إنشاء المجلد "${text}" بنجاح!\n\n🔹 يمكنك الآن إضافة أقسام إليه.`,
       token,
       {
         reply_markup: {
           keyboard: [
             ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
             ['✏️ تعديل قسم', '🗑️ حذف قسم'],
-            ['📊 ترتيب الأقسام', '🔙 العودة للقائمة']
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
           ],
           resize_keyboard: true
         }
@@ -448,12 +451,19 @@ async function handleCreateDirect(chatId, text, token) {
   }
 
   if (adminState.step === 'waiting_name') {
-    // حفظ الاسم المؤقت
+    if (categories.structure[text]) {
+      await sendMessage(chatId, 
+        '⚠️ هذا الاسم موجود بالفعل! الرجاء اختيار اسم آخر:',
+        token
+      );
+      return;
+    }
+
     adminState.tempData.name = text;
     adminState.step = 'waiting_content';
     
     await sendMessage(chatId, 
-      `📝 أدخل محتوى القسم "${text}":\n\n(يمكنك استخدام HTML للتنسيق)`,
+      `📝 أدخل محتوى القسم "${text}":\n\n(يمكنك استخدام HTML للتنسيق)\nمثال: <b>نص غامق</b>`,
       token,
       {
         reply_markup: {
@@ -468,7 +478,6 @@ async function handleCreateDirect(chatId, text, token) {
   if (adminState.step === 'waiting_content') {
     const name = adminState.tempData.name;
     
-    // إنشاء القسم المباشر
     categories.structure[name] = {
       type: 'direct',
       content: text,
@@ -485,10 +494,10 @@ async function handleCreateDirect(chatId, text, token) {
       const buttons = folderOptions.map(folder => [
         { text: `📁 ${folder}`, callback_data: `add_to_folder_${name}_${folder}` }
       ]);
-      buttons.push([{ text: '🚫 عدم الإضافة لمجلد', callback_data: `skip_folder_${name}` }]);
+      buttons.push([{ text: '🚫 عدم الإضافة', callback_data: `skip_folder_${name}` }]);
 
       await sendMessage(chatId, 
-        `✅ تم إنشاء القسم "${name}"!\n\nهل تريد إضافته لمجلد؟`,
+        `✅ تم إنشاء القسم "${name}"!\n\n📌 هل تريد إضافته لمجلد؟`,
         token,
         {
           reply_markup: {
@@ -505,7 +514,8 @@ async function handleCreateDirect(chatId, text, token) {
             keyboard: [
               ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
               ['✏️ تعديل قسم', '🗑️ حذف قسم'],
-              ['📊 ترتيب الأقسام', '🔙 العودة للقائمة']
+              ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+              ['🔙 العودة للقائمة']
             ],
             resize_keyboard: true
           }
@@ -519,13 +529,286 @@ async function handleCreateDirect(chatId, text, token) {
   }
 }
 
+// ========== تعديل قسم ==========
+
+async function showEditCategory(chatId, token) {
+  const categoryList = Object.keys(categories.structure);
+  
+  if (categoryList.length === 0) {
+    await sendMessage(chatId, 
+      '⚠️ لا توجد أقسام لتعديلها.',
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  const buttons = categoryList.map(cat => [
+    { text: `✏️ ${cat}`, callback_data: `edit_select_${cat}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+  await sendMessage(chatId, 
+    '✏️ اختر القسم الذي تريد تعديله:',
+    token,
+    {
+      reply_markup: {
+        inline_keyboard: buttons
+      }
+    }
+  );
+}
+
+async function handleEditCategory(chatId, text, token) {
+  if (adminState.step === 'waiting_new_name') {
+    const oldName = adminState.tempData.oldName;
+    const category = categories.structure[oldName];
+    
+    if (!category) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+      adminState.currentAction = null;
+      adminState.step = null;
+      return;
+    }
+
+    // تحديث الاسم
+    delete categories.structure[oldName];
+    categories.structure[text] = category;
+    
+    // تحديث الترتيب
+    const index = categories.order.indexOf(oldName);
+    if (index !== -1) {
+      categories.order[index] = text;
+    }
+
+    // تحديث في المجلدات
+    for (const key of Object.keys(categories.structure)) {
+      if (categories.structure[key].type === 'folder') {
+        const children = categories.structure[key].children;
+        const childIndex = children.indexOf(oldName);
+        if (childIndex !== -1) {
+          children[childIndex] = text;
+        }
+      }
+    }
+
+    await sendMessage(chatId, 
+      `✅ تم تعديل اسم القسم إلى "${text}" بنجاح!`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['✏️ تعديل قسم', '🗑️ حذف قسم'],
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+
+    adminState.currentAction = null;
+    adminState.step = null;
+    adminState.tempData = {};
+    return;
+  }
+
+  if (adminState.step === 'waiting_new_content') {
+    const name = adminState.tempData.name;
+    const category = categories.structure[name];
+    
+    if (!category || category.type !== 'direct') {
+      await sendMessage(chatId, '⚠️ هذا القسم ليس قسمًا مباشرًا!', token);
+      adminState.currentAction = null;
+      adminState.step = null;
+      return;
+    }
+
+    category.content = text;
+
+    await sendMessage(chatId, 
+      `✅ تم تحديث محتوى القسم "${name}" بنجاح!`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['✏️ تعديل قسم', '🗑️ حذف قسم'],
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+
+    adminState.currentAction = null;
+    adminState.step = null;
+    adminState.tempData = {};
+    return;
+  }
+}
+
+// ========== حذف قسم ==========
+
+async function showDeleteCategory(chatId, token) {
+  const categoryList = Object.keys(categories.structure);
+  
+  if (categoryList.length === 0) {
+    await sendMessage(chatId, 
+      '⚠️ لا توجد أقسام لحذفها.',
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  const buttons = categoryList.map(cat => [
+    { text: `🗑️ ${cat}`, callback_data: `delete_select_${cat}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+  await sendMessage(chatId, 
+    '🗑️ اختر القسم الذي تريد حذفه:',
+    token,
+    {
+      reply_markup: {
+        inline_keyboard: buttons
+      }
+    }
+  );
+}
+
+// ========== ترتيب الأقسام ==========
+
+async function showReorderCategories(chatId, token) {
+  if (categories.order.length === 0) {
+    await sendMessage(chatId, 
+      '⚠️ لا توجد أقسام لترتيبها.',
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  let message = '📊 الترتيب الحالي للأقسام:\n\n';
+  categories.order.forEach((name, index) => {
+    const type = categories.structure[name]?.type === 'folder' ? '📁' : '📄';
+    message += `${index + 1}. ${type} ${name}\n`;
+  });
+
+  message += '\n🔹 اختر قسماً لنقله:';
+
+  const buttons = categories.order.map((name, index) => [
+    { text: `${index + 1}. ${name}`, callback_data: `reorder_select_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ========== نسخ قسم ==========
+
+async function showCopyCategory(chatId, token) {
+  const categoryList = Object.keys(categories.structure);
+  
+  if (categoryList.length === 0) {
+    await sendMessage(chatId, 
+      '⚠️ لا توجد أقسام لنسخها.',
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  const buttons = categoryList.map(cat => [
+    { text: `📋 نسخ ${cat}`, callback_data: `copy_select_${cat}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+  await sendMessage(chatId, 
+    '📋 اختر القسم الذي تريد نسخه:',
+    token,
+    {
+      reply_markup: {
+        inline_keyboard: buttons
+      }
+    }
+  );
+}
+
+// ========== تصدير/استيراد ==========
+
+async function showExportImport(chatId, token) {
+  const message = `
+🔄 تصدير/استيراد الإعدادات
+
+📤 تصدير: احصل على نسخة من جميع الأقسام
+📥 استيراد: استعادة نسخة محفوظة مسبقاً
+
+⚠️ تحذير: الاستيراد سيحل محل الأقسام الحالية!
+  `;
+
+  const keyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📤 تصدير الأقسام', callback_data: 'export_data' }],
+        [{ text: '📥 استيراد الأقسام', callback_data: 'import_data' }],
+        [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+      ]
+    }
+  };
+
+  await sendMessage(chatId, message, token, keyboard);
+}
+
 // ========== عرض الأقسام للمستخدم ==========
 
 async function showUserMainMenu(chatId, token) {
-  // بناء قائمة الأقسام
+  if (categories.order.length === 0) {
+    return sendMessage(chatId, 
+      '📌 البوت قيد الإعداد حالياً.\nيرجى المحاولة لاحقاً.',
+      token
+    );
+  }
+
   const buttons = [];
   
-  // عرض الأقسام حسب الترتيب
   for (const categoryName of categories.order) {
     const category = categories.structure[categoryName];
     if (!category) continue;
@@ -537,7 +820,6 @@ async function showUserMainMenu(chatId, token) {
     }
   }
 
-  // إضافة أزرار مساعدة
   buttons.push(['ℹ️ عن البوت', '🆘 مساعدة']);
 
   await sendMessage(chatId, 
@@ -552,10 +834,10 @@ async function showUserMainMenu(chatId, token) {
   );
 }
 
-// ========== دوال مساعدة متقدمة ==========
+// ========== دوال معالجة الكولباك ==========
 
 async function handleAdminCallback(data, chatId, messageId, token) {
-  // معالجة طلبات الأدمن
+  // ===== إدارة الطلبات =====
   if (data === 'admin_pending') {
     await showPendingRequests(chatId, token);
     return;
@@ -576,7 +858,12 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // معالجة إضافة قسم لمجلد
+  if (data === 'admin_categories_back') {
+    await showCategoriesManagement(chatId, token);
+    return;
+  }
+
+  // ===== إضافة لمجلد =====
   if (data.startsWith('add_to_folder_')) {
     const parts = data.split('_');
     const sectionName = parts[3];
@@ -595,7 +882,8 @@ async function handleAdminCallback(data, chatId, messageId, token) {
             keyboard: [
               ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
               ['✏️ تعديل قسم', '🗑️ حذف قسم'],
-              ['📊 ترتيب الأقسام', '🔙 العودة للقائمة']
+              ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+              ['🔙 العودة للقائمة']
             ],
             resize_keyboard: true
           }
@@ -615,7 +903,8 @@ async function handleAdminCallback(data, chatId, messageId, token) {
           keyboard: [
             ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
             ['✏️ تعديل قسم', '🗑️ حذف قسم'],
-            ['📊 ترتيب الأقسام', '🔙 العودة للقائمة']
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
           ],
           resize_keyboard: true
         }
@@ -624,7 +913,269 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // معالجة الموافقة/الرفض
+  // ===== تعديل قسم =====
+  if (data.startsWith('edit_select_')) {
+    const name = data.replace('edit_select_', '');
+    const category = categories.structure[name];
+    
+    if (!category) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+      return;
+    }
+
+    const buttons = [
+      [{ text: '✏️ تغيير الاسم', callback_data: `edit_name_${name}` }]
+    ];
+
+    if (category.type === 'direct') {
+      buttons.push([{ text: '✏️ تغيير المحتوى', callback_data: `edit_content_${name}` }]);
+    }
+
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+    await sendMessage(chatId, 
+      `✏️ تعديل القسم: "${name}"\n\nنوع: ${category.type === 'folder' ? '📁 مجلد' : '📄 قسم مباشر'}\nاختر ما تريد تعديله:`,
+      token,
+      {
+        reply_markup: { inline_keyboard: buttons }
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('edit_name_')) {
+    const name = data.replace('edit_name_', '');
+    adminState.currentAction = 'edit_category';
+    adminState.step = 'waiting_new_name';
+    adminState.tempData.oldName = name;
+    
+    await sendMessage(chatId, 
+      `✏️ أدخل الاسم الجديد للقسم "${name}":`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [['🔙 إلغاء']],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('edit_content_')) {
+    const name = data.replace('edit_content_', '');
+    adminState.currentAction = 'edit_category';
+    adminState.step = 'waiting_new_content';
+    adminState.tempData.name = name;
+    
+    await sendMessage(chatId, 
+      `✏️ أدخل المحتوى الجديد للقسم "${name}":\n\n(يمكنك استخدام HTML)`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [['🔙 إلغاء']],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== حذف قسم =====
+  if (data.startsWith('delete_select_')) {
+    const name = data.replace('delete_select_', '');
+    const category = categories.structure[name];
+    
+    if (!category) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+      return;
+    }
+
+    const buttons = [
+      [
+        { text: '✅ نعم، احذف', callback_data: `delete_confirm_${name}` },
+        { text: '❌ إلغاء', callback_data: 'admin_categories_back' }
+      ]
+    ];
+
+    await sendMessage(chatId, 
+      `⚠️ هل أنت متأكد من حذف القسم "${name}"؟\n\nنوع: ${category.type === 'folder' ? '📁 مجلد' : '📄 قسم مباشر'}\n${category.type === 'folder' ? `📌 يحتوي على ${category.children?.length || 0} أقسام فرعية` : ''}`,
+      token,
+      {
+        reply_markup: { inline_keyboard: buttons }
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('delete_confirm_')) {
+    const name = data.replace('delete_confirm_', '');
+    
+    // حذف من الهيكل
+    delete categories.structure[name];
+    
+    // حذف من الترتيب
+    const index = categories.order.indexOf(name);
+    if (index !== -1) {
+      categories.order.splice(index, 1);
+    }
+    
+    // حذف من المجلدات
+    for (const key of Object.keys(categories.structure)) {
+      if (categories.structure[key].type === 'folder') {
+        const children = categories.structure[key].children;
+        const childIndex = children.indexOf(name);
+        if (childIndex !== -1) {
+          children.splice(childIndex, 1);
+        }
+      }
+    }
+
+    await sendMessage(chatId, 
+      `✅ تم حذف القسم "${name}" بنجاح!`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['✏️ تعديل قسم', '🗑️ حذف قسم'],
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== ترتيب الأقسام =====
+  if (data.startsWith('reorder_select_')) {
+    const index = parseInt(data.replace('reorder_select_', ''));
+    adminState.tempData.reorderIndex = index;
+    
+    const buttons = [];
+    for (let i = 0; i < categories.order.length; i++) {
+      if (i !== index) {
+        buttons.push([
+          { text: `⬆️ نقل إلى ${i + 1}`, callback_data: `reorder_move_${index}_${i}` }
+        ]);
+      }
+    }
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_categories_back' }]);
+
+    await sendMessage(chatId, 
+      `📊 اختر الموقع الجديد للقسم "${categories.order[index]}":`,
+      token,
+      {
+        reply_markup: { inline_keyboard: buttons }
+      }
+    );
+    return;
+  }
+
+  if (data.startsWith('reorder_move_')) {
+    const parts = data.split('_');
+    const from = parseInt(parts[2]);
+    const to = parseInt(parts[3]);
+    
+    const item = categories.order.splice(from, 1)[0];
+    categories.order.splice(to, 0, item);
+
+    await sendMessage(chatId, 
+      `✅ تم تحديث الترتيب بنجاح!`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['✏️ تعديل قسم', '🗑️ حذف قسم'],
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== نسخ قسم =====
+  if (data.startsWith('copy_select_')) {
+    const name = data.replace('copy_select_', '');
+    const category = categories.structure[name];
+    
+    if (!category) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+      return;
+    }
+
+    const newName = name + '_نسخة';
+    let counter = 1;
+    while (categories.structure[newName + (counter > 1 ? `_${counter}` : '')]) {
+      counter++;
+    }
+    const finalName = newName + (counter > 1 ? `_${counter}` : '');
+
+    // نسخ القسم
+    categories.structure[finalName] = JSON.parse(JSON.stringify(category));
+    categories.order.push(finalName);
+
+    await sendMessage(chatId, 
+      `✅ تم نسخ القسم "${name}" إلى "${finalName}" بنجاح!`,
+      token,
+      {
+        reply_markup: {
+          keyboard: [
+            ['📁 إنشاء مجلد', '📄 إنشاء قسم مباشر'],
+            ['✏️ تعديل قسم', '🗑️ حذف قسم'],
+            ['📊 ترتيب الأقسام', '📋 نسخ قسم'],
+            ['🔙 العودة للقائمة']
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== تصدير/استيراد =====
+  if (data === 'export_data') {
+    const exportData = {
+      categories: categories.structure,
+      order: categories.order,
+      exported: new Date().toLocaleString('ar-EG')
+    };
+
+    const jsonData = JSON.stringify(exportData, null, 2);
+    
+    // إرسال الملف كرسالة نصية (لأنه صغير)
+    await sendMessage(chatId, 
+      `📤 بيانات الأقسام:\n\n<pre>${jsonData}</pre>\n\n📌 انسخ هذه البيانات للاستيراد لاحقاً.`,
+      token,
+      { parse_mode: 'HTML' }
+    );
+    return;
+  }
+
+  if (data === 'import_data') {
+    adminState.currentAction = 'import';
+    adminState.step = 'waiting_data';
+    
+    await sendMessage(chatId, 
+      '📥 أرسل بيانات الأقسام التي تريد استيرادها (JSON):',
+      token,
+      {
+        reply_markup: {
+          keyboard: [['🔙 إلغاء']],
+          resize_keyboard: true
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== معالجة الموافقة/الرفض =====
   if (data.startsWith('approve_')) {
     const targetId = data.split('_')[1];
     if (pendingUsers[targetId]) {
@@ -848,9 +1399,13 @@ async function showSettings(chatId, token) {
 • إنشاء مجلدات وأقسام
 • تعديل وحذف الأقسام
 • ترتيب الأقسام
+• نسخ الأقسام
 
 📢 البث الجماعي:
 • إرسال رسائل لجميع المستخدمين
+
+🔄 تصدير/استيراد:
+• حفظ واستعادة إعدادات الأقسام
 
 💡 نصيحة: استخدم الأزرار للتنقل بسهولة
   `;
@@ -888,18 +1443,21 @@ async function sendBroadcast(chatId, message, token) {
         keyboard: [
           ['📋 إدارة الطلبات', '📂 إدارة الأقسام'],
           ['📊 الإحصائيات', '⚙️ إعدادات البوت'],
-          ['📢 إرسال إشعار', '🔙 العودة للقائمة']
+          ['📢 إرسال إشعار', '🔄 تصدير/استيراد'],
+          ['🔙 العودة للقائمة']
         ],
         resize_keyboard: true
       }
     }
   );
+
+  adminState.currentAction = null;
+  adminState.step = null;
 }
 
 // ========== دوال المستخدم ==========
 
 async function handleUserSelection(chatId, text, token) {
-  // معالجة اختيارات المستخدم
   if (text === 'ℹ️ عن البوت') {
     return sendMessage(chatId, 
       '📌 بوت القصص والمقاطع\nالإصدار 2.0\nللتواصل: @jahab',
@@ -914,7 +1472,6 @@ async function handleUserSelection(chatId, text, token) {
     );
   }
 
-  // البحث عن القسم المباشر
   if (categories.structure[text] && categories.structure[text].type === 'direct') {
     const content = categories.structure[text].content;
     return sendMessage(chatId, content, token, { parse_mode: 'HTML' });
@@ -924,7 +1481,6 @@ async function handleUserSelection(chatId, text, token) {
 }
 
 async function handleUserCallback(data, chatId, token, userId) {
-  // معالجة فتح مجلد
   if (data.startsWith('folder_')) {
     const folderName = data.replace('folder_', '');
     const folder = categories.structure[folderName];
@@ -955,7 +1511,6 @@ async function handleUserCallback(data, chatId, token, userId) {
     return;
   }
 
-  // معالجة عرض قسم مباشر
   if (data.startsWith('direct_')) {
     const sectionName = data.replace('direct_', '');
     const section = categories.structure[sectionName];
@@ -966,7 +1521,6 @@ async function handleUserCallback(data, chatId, token, userId) {
     return;
   }
 
-  // العودة للقائمة
   if (data === 'back_to_menu') {
     await showUserMainMenu(chatId, token);
     return;
