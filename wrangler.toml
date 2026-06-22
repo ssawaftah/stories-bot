@@ -5,3 +5,4 @@ compatibility_date = "2024-01-01"
 [vars]
 BOT_TOKEN = "8907171536:AAHA3f6W5o8jazlOpU4K-Eu1h-dMtknBdAs"
 ADMIN_ID = "6455001010"
+LOG_CHANNEL_ID = "-1004317441790"  # ضع معرف القناة الرقمي هنا
