@@ -3,5 +3,5 @@ main = "src/index.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-BOT_TOKEN = "ضع_توكن_البوت_هنا"
-ADMIN_ID = "ضع_معرف_الأدمن_هنا"
+BOT_TOKEN = "8907171536:AAHA3f6W5o8jazlOpU4K-Eu1h-dMtknBdAs"
+ADMIN_ID = "6455001010"
