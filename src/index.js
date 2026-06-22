@@ -5,13 +5,13 @@ const approvedUsers = {};
 
 // ========== نظام المحتوى ==========
 const contentSystem = {
-  items: {}, // key: contentId, value: { id, type, title, content, fileId, date }
+  items: {},
   nextId: 10000
 };
 
 // ========== نظام الاشتراك الإجباري ==========
 const mandatorySubscription = {
-  channels: [], // قائمة المعرفات (مثل: @channel, -100123456)
+  channels: [],
   bots: [],
   groups: [],
   enabled: false
@@ -360,7 +360,7 @@ async function handleAdminSubActions(chatId, text, token) {
     adminState.currentAction = 'add_content';
     adminState.step = 'waiting_title';
     adminState.tempData.type = typeMap[text];
-    adminState.tempData.mediaItems = []; // تخزين الوسائط المتعددة
+    adminState.tempData.mediaItems = [];
     
     await sendMessage(chatId, 
       `أدخل عنوان المحتوى (نوع: ${text}):`,
@@ -417,7 +417,7 @@ async function handleAdminSubActions(chatId, text, token) {
     return;
   }
 
-  // ===== معالجة النص (تجميع النصوص في محتوى واحد) =====
+  // ===== معالجة النص =====
   if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content') {
     if (adminState.tempData.type === 'text') {
       if (!adminState.tempData.texts) {
@@ -656,7 +656,7 @@ async function handleAdminMedia(chatId, msg, token) {
   await sendMessage(chatId, '⚠️ لا يمكنك إرسال وسائط الآن.', token);
 }
 
-// ========== حفظ محتوى واحد (متعدد الوسائط) ==========
+// ========== حفظ محتوى واحد ==========
 
 async function saveSingleContent(chatId, token) {
   const title = adminState.tempData.title;
@@ -681,15 +681,13 @@ async function saveSingleContent(chatId, token) {
   if (type === 'text') {
     contentText = texts.join('\n\n─────────────────\n\n');
   } else if (mediaItems.length === 1) {
-    // وسيط واحد
     fileId = mediaItems[0].fileId;
     contentText = mediaItems[0].caption || '';
   } else {
-    // عدة وسائط - نخزنها كقائمة
     const mediaList = mediaItems.map((item, index) => {
       return `[${index + 1}] ${item.caption || 'بدون وصف'}`;
     }).join('\n');
-    fileId = mediaItems[0].fileId; // نحتفظ بأول fileId للعرض
+    fileId = mediaItems[0].fileId;
     contentText = `📎 عدد الوسائط: ${mediaItems.length}\n\n${mediaList}`;
   }
 
@@ -699,7 +697,7 @@ async function saveSingleContent(chatId, token) {
     title: title,
     content: contentText,
     fileId: fileId,
-    mediaItems: mediaItems.length > 1 ? mediaItems : null, // حفظ جميع الوسائط
+    mediaItems: mediaItems.length > 1 ? mediaItems : null,
     date: new Date().toLocaleString('ar-EG')
   };
 
@@ -717,49 +715,127 @@ async function saveSingleContent(chatId, token) {
   await showAdminMainMenu(chatId, token);
 }
 
+// ====================================================================
+// ========== دوال المستخدم ==========
+// ====================================================================
+
+async function showUserMainMenu(chatId, token) {
+  const message = `🎉 مرحباً بك في البوت!
+
+🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.
+📌 أو استخدم الأزرار أدناه:`;
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      keyboard: [
+        ['🔍 البحث عن محتوى'],
+        ['ℹ️ عن البوت']
+      ],
+      resize_keyboard: true
+    }
+  });
+}
+
+async function handleUserSearch(chatId, text, token, userId) {
+  if (text === '🔍 البحث عن محتوى') {
+    userState[userId] = { step: 'searching' };
+    await sendMessage(chatId, 
+      'أرسل رقم المحتوى الذي تريد مشاهدته:',
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [
+            ['🔙 رجوع']
+          ], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (text === 'ℹ️ عن البوت') {
+    await sendMessage(chatId, botSettings.aboutText, token);
+    return;
+  }
+
+  if (text === '🔙 رجوع') {
+    userState[userId] = { step: 'main' };
+    await showUserMainMenu(chatId, token);
+    return;
+  }
+
+  if (userState[userId] && userState[userId].step === 'searching') {
+    const contentId = text.trim();
+    const item = contentSystem.items[contentId];
+    
+    if (item) {
+      await sendContent(chatId, item, token);
+    } else {
+      await sendMessage(chatId, 
+        `❌ لا يوجد محتوى برقم ${contentId}\n\nتأكد من الرقم وحاول مرة أخرى:`,
+        token
+      );
+    }
+    return;
+  }
+
+  const contentId = text.trim();
+  const item = contentSystem.items[contentId];
+  
+  if (item) {
+    await sendContent(chatId, item, token);
+  } else {
+    await sendMessage(chatId, 
+      `❌ لا يوجد محتوى برقم ${contentId}\n\n🔍 استخدم زر "البحث عن محتوى"`,
+      token
+    );
+  }
+}
+
 // ========== إرسال المحتوى للمستخدم ==========
 
 async function sendContent(chatId, item, token) {
-  const caption = `${item.title}\n\nرقم: ${item.id}\n${item.date}`;
+  // عنوان المحتوى فقط
+  const title = item.title;
 
   // إذا كان هناك وسائط متعددة
   if (item.mediaItems && item.mediaItems.length > 1) {
-    // إرسال أول وسيط مع قائمة
+    // إرسال أول وسيط مع العنوان
     const firstMedia = item.mediaItems[0];
     if (firstMedia.type === 'image') {
-      await sendPhoto(chatId, firstMedia.fileId, `${item.title}\n\nرقم: ${item.id}\n${item.date}\n\n📎 ${item.mediaItems.length} وسائط`, token);
+      await sendPhoto(chatId, firstMedia.fileId, title, token);
     } else if (firstMedia.type === 'video') {
-      await sendVideo(chatId, firstMedia.fileId, `${item.title}\n\nرقم: ${item.id}\n${item.date}\n\n📎 ${item.mediaItems.length} وسائط`, token);
+      await sendVideo(chatId, firstMedia.fileId, title, token);
     }
     
-    // إرسال باقي الوسائط كمجموعة
+    // إرسال باقي الوسائط بدون عنوان (فقط المحتوى)
     for (let i = 1; i < item.mediaItems.length; i++) {
       const media = item.mediaItems[i];
       if (media.type === 'image') {
-        await sendPhoto(chatId, media.fileId, `[${i+1}] ${media.caption || ''}`, token);
+        await sendPhoto(chatId, media.fileId, '', token);
       } else if (media.type === 'video') {
-        await sendVideo(chatId, media.fileId, `[${i+1}] ${media.caption || ''}`, token);
+        await sendVideo(chatId, media.fileId, '', token);
       }
     }
-    
-    await sendMessage(chatId, `📎 إجمالي ${item.mediaItems.length} وسائط`, token);
   } 
   // وسيط واحد
   else if (item.fileId && (item.type === 'video' || item.type === 'animation')) {
-    await sendVideo(chatId, item.fileId, caption, token);
+    await sendVideo(chatId, item.fileId, title, token);
   } else if (item.fileId && item.type === 'image') {
-    await sendPhoto(chatId, item.fileId, caption, token);
+    await sendPhoto(chatId, item.fileId, title, token);
   } else if (item.fileId && item.type === 'document') {
-    await sendDocument(chatId, item.fileId, caption, token);
+    await sendDocument(chatId, item.fileId, title, token);
   } else {
-    // نص عادي
+    // نص عادي - إرسال العنوان والمحتوى بدون إضافات
     await sendMessage(chatId, 
-      `${item.title}\n\n${item.content}\n\nرقم: ${item.id}\n${item.date}`,
+      `${title}\n\n${item.content}`,
       token
     );
   }
 
-  await sendMessage(chatId, '🔍 للبحث عن محتوى آخر استخدم الزر:', token, {
+  // عرض زر البحث
+  await sendMessage(chatId, '🔍 للبحث عن محتوى آخر:', token, {
     reply_markup: {
       keyboard: [
         ['🔍 البحث عن محتوى'],
@@ -771,111 +847,80 @@ async function sendContent(chatId, item, token) {
 }
 
 // ====================================================================
-// ========== إدارة الاشتراك الإجباري ==========
+// ========== دوال إرسال الوسائط ==========
 // ====================================================================
 
-async function showSubscriptionManagement(chatId, token) {
-  const status = mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل';
-  const channels = mandatorySubscription.channels.length > 0 
-    ? mandatorySubscription.channels.join('\n• ') 
-    : 'لا يوجد';
-  const groups = mandatorySubscription.groups.length > 0 
-    ? mandatorySubscription.groups.join('\n• ') 
-    : 'لا يوجد';
-
-  const message = `🔗 إدارة الاشتراك الإجباري
-
-📊 الحالة: ${status}
-
-📢 القنوات:
-• ${channels}
-
-👥 المجموعات:
-• ${groups}
-
-اختر الإجراء:`;
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['➕ إضافة قناة', '➕ إضافة مجموعة'],
-        ['🗑️ حذف قناة', '🗑️ حذف مجموعة'],
-        ['🔄 تفعيل/تعطيل', '🔙 رجوع']
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function showDeleteSubscriptionMenu(chatId, token) {
-  const allSubs = [
-    ...mandatorySubscription.channels.map(c => ({ type: 'قناة', id: c })),
-    ...mandatorySubscription.groups.map(g => ({ type: 'مجموعة', id: g }))
-  ];
-
-  if (allSubs.length === 0) {
-    await sendMessage(chatId, '⚠️ لا يوجد اشتراكات للحذف', token);
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  const buttons = allSubs.map(sub => [
-    { text: `🗑️ ${sub.type}: ${sub.id}`, callback_data: `delete_sub_${sub.type}_${sub.id}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_subscription_back' }]);
-
-  await sendMessage(chatId, '🗑️ اختر الاشتراك للحذف:', token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-// ====================================================================
-// ========== إعدادات البوت ==========
-// ====================================================================
-
-async function showBotSettings(chatId, token) {
-  const message = `⚙️ إعدادات البوت
-
-📝 نص "عن البوت":
-${botSettings.aboutText}
-
-الإجراءات:`;
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['✏️ تعديل نص عن البوت'],
-        ['🔙 رجوع']
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-// ====================================================================
-// ========== إدارة الطلبات ==========
-// ====================================================================
-
-async function showRequestsManagement(chatId, token) {
-  const pendingList = Object.values(pendingUsers);
-  const rejectedList = Object.values(rejectedUsers);
+async function sendVideo(chatId, fileId, caption, token) {
+  const url = `https://api.telegram.org/bot${token}/sendVideo`;
   
-  let message = `📋 إدارة الطلبات\n\n📌 المعلقة: ${pendingList.length}\n❌ المرفوضة: ${rejectedList.length}\n\nاختر القائمة:`;
+  const payload = {
+    chat_id: chatId,
+    video: fileId,
+    caption: caption || '',
+    parse_mode: 'HTML'
+  };
 
-  const buttons = [
-    [{ text: `📋 الطلبات المعلقة (${pendingList.length})`, callback_data: 'show_pending' }],
-    [{ text: `❌ المرفوضين (${rejectedList.length})`, callback_data: 'show_rejected' }],
-    [{ text: `✅ المعتمدين (${Object.keys(approvedUsers).length})`, callback_data: 'show_approved' }],
-    [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
-  ];
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('Error sending video:', error);
+    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الفيديو', token);
+  }
+}
 
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
+async function sendPhoto(chatId, fileId, caption, token) {
+  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
+  
+  const payload = {
+    chat_id: chatId,
+    photo: fileId,
+    caption: caption || '',
+    parse_mode: 'HTML'
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('Error sending photo:', error);
+    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الصورة', token);
+  }
+}
+
+async function sendDocument(chatId, fileId, caption, token) {
+  const url = `https://api.telegram.org/bot${token}/sendDocument`;
+  
+  const payload = {
+    chat_id: chatId,
+    document: fileId,
+    caption: caption || '',
+    parse_mode: 'HTML'
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('Error sending document:', error);
+    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الملف', token);
+  }
 }
 
 // ====================================================================
-// ========== إدارة المحتوى ==========
+// ========== دوال إدارة المحتوى (للواجهة) ==========
 // ====================================================================
 
 async function showContentManagement(chatId, token) {
@@ -965,154 +1010,137 @@ async function showEditContentMenu(chatId, token) {
 }
 
 // ====================================================================
-// ========== دوال المستخدم ==========
+// ========== دوال إدارة الطلبات ==========
 // ====================================================================
 
-async function showUserMainMenu(chatId, token) {
-  const message = `🎉 مرحباً بك في البوت!
+async function showRequestsManagement(chatId, token) {
+  const pendingList = Object.values(pendingUsers);
+  const rejectedList = Object.values(rejectedUsers);
+  
+  let message = `📋 إدارة الطلبات\n\n📌 المعلقة: ${pendingList.length}\n❌ المرفوضة: ${rejectedList.length}\n\nاختر القائمة:`;
 
-🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.
-📌 أو استخدم الأزرار أدناه:`;
+  const buttons = [
+    [{ text: `📋 الطلبات المعلقة (${pendingList.length})`, callback_data: 'show_pending' }],
+    [{ text: `❌ المرفوضين (${rejectedList.length})`, callback_data: 'show_rejected' }],
+    [{ text: `✅ المعتمدين (${Object.keys(approvedUsers).length})`, callback_data: 'show_approved' }],
+    [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+  ];
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ====================================================================
+// ========== دوال الاشتراك الإجباري ==========
+// ====================================================================
+
+async function showSubscriptionManagement(chatId, token) {
+  const status = mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل';
+  const channels = mandatorySubscription.channels.length > 0 
+    ? mandatorySubscription.channels.join('\n• ') 
+    : 'لا يوجد';
+  const groups = mandatorySubscription.groups.length > 0 
+    ? mandatorySubscription.groups.join('\n• ') 
+    : 'لا يوجد';
+
+  const message = `🔗 إدارة الاشتراك الإجباري
+
+📊 الحالة: ${status}
+
+📢 القنوات:
+• ${channels}
+
+👥 المجموعات:
+• ${groups}
+
+اختر الإجراء:`;
 
   await sendMessage(chatId, message, token, {
     reply_markup: {
       keyboard: [
-        ['🔍 البحث عن محتوى'],
-        ['ℹ️ عن البوت']
+        ['➕ إضافة قناة', '➕ إضافة مجموعة'],
+        ['🗑️ حذف قناة', '🗑️ حذف مجموعة'],
+        ['🔄 تفعيل/تعطيل', '🔙 رجوع']
       ],
       resize_keyboard: true
     }
   });
 }
 
-async function handleUserSearch(chatId, text, token, userId) {
-  if (text === '🔍 البحث عن محتوى') {
-    userState[userId] = { step: 'searching' };
-    await sendMessage(chatId, 
-      'أرسل رقم المحتوى الذي تريد مشاهدته:',
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            ['🔙 رجوع']
-          ], 
-          resize_keyboard: true 
-        }
-      }
-    );
+async function showDeleteSubscriptionMenu(chatId, token) {
+  const allSubs = [
+    ...mandatorySubscription.channels.map(c => ({ type: 'قناة', id: c })),
+    ...mandatorySubscription.groups.map(g => ({ type: 'مجموعة', id: g }))
+  ];
+
+  if (allSubs.length === 0) {
+    await sendMessage(chatId, '⚠️ لا يوجد اشتراكات للحذف', token);
+    await showSubscriptionManagement(chatId, token);
     return;
   }
 
-  if (text === 'ℹ️ عن البوت') {
-    await sendMessage(chatId, botSettings.aboutText, token);
-    return;
-  }
+  const buttons = allSubs.map(sub => [
+    { text: `🗑️ ${sub.type}: ${sub.id}`, callback_data: `delete_sub_${sub.type}_${sub.id}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_subscription_back' }]);
 
-  if (text === '🔙 رجوع') {
-    userState[userId] = { step: 'main' };
-    await showUserMainMenu(chatId, token);
-    return;
-  }
+  await sendMessage(chatId, '🗑️ اختر الاشتراك للحذف:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
 
-  if (userState[userId] && userState[userId].step === 'searching') {
-    const contentId = text.trim();
-    const item = contentSystem.items[contentId];
-    
-    if (item) {
-      await sendContent(chatId, item, token);
-    } else {
-      await sendMessage(chatId, 
-        `❌ لا يوجد محتوى برقم ${contentId}\n\nتأكد من الرقم وحاول مرة أخرى:`,
-        token
-      );
+// ====================================================================
+// ========== دوال إعدادات البوت ==========
+// ====================================================================
+
+async function showBotSettings(chatId, token) {
+  const message = `⚙️ إعدادات البوت
+
+📝 نص "عن البوت":
+${botSettings.aboutText}
+
+الإجراءات:`;
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      keyboard: [
+        ['✏️ تعديل نص عن البوت'],
+        ['🔙 رجوع']
+      ],
+      resize_keyboard: true
     }
-    return;
-  }
-
-  const contentId = text.trim();
-  const item = contentSystem.items[contentId];
-  
-  if (item) {
-    await sendContent(chatId, item, token);
-  } else {
-    await sendMessage(chatId, 
-      `❌ لا يوجد محتوى برقم ${contentId}\n\n🔍 استخدم زر "البحث عن محتوى"`,
-      token
-    );
-  }
+  });
 }
 
 // ====================================================================
-// ========== دوال إرسال الوسائط ==========
+// ========== دوال إحصائيات ==========
 // ====================================================================
 
-async function sendVideo(chatId, fileId, caption, token) {
-  const url = `https://api.telegram.org/bot${token}/sendVideo`;
-  
-  const payload = {
-    chat_id: chatId,
-    video: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
+async function showStatistics(chatId, token) {
+  const stats = `📊 الإحصائيات العامة:
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    return await response.json();
-  } catch (error) {
-    console.error('Error sending video:', error);
-    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الفيديو', token);
-  }
-}
+👥 المستخدمين:
+• ✅ معتمدين: ${Object.keys(approvedUsers).length}
+• ⏳ معلق: ${Object.keys(pendingUsers).length}
+• ❌ مرفوض: ${Object.keys(rejectedUsers).length}
 
-async function sendPhoto(chatId, fileId, caption, token) {
-  const url = `https://api.telegram.org/bot${token}/sendPhoto`;
-  
-  const payload = {
-    chat_id: chatId,
-    photo: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
+📦 المحتوى:
+• 📦 مجموع: ${Object.keys(contentSystem.items).length}
+• 🖼️ صور: ${Object.values(contentSystem.items).filter(i => i.type === 'image').length}
+• 🎬 فيديو: ${Object.values(contentSystem.items).filter(i => i.type === 'video').length}
+• 📝 نصوص: ${Object.values(contentSystem.items).filter(i => i.type === 'text').length}
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    return await response.json();
-  } catch (error) {
-    console.error('Error sending photo:', error);
-    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الصورة', token);
-  }
-}
+🔗 الاشتراك الإجباري:
+• 📢 قنوات: ${mandatorySubscription.channels.length}
+• 👥 مجموعات: ${mandatorySubscription.groups.length}
+• 📌 الحالة: ${mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل'}
 
-async function sendDocument(chatId, fileId, caption, token) {
-  const url = `https://api.telegram.org/bot${token}/sendDocument`;
-  
-  const payload = {
-    chat_id: chatId,
-    document: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
+⏱️ آخر تحديث: ${new Date().toLocaleString('ar-EG')}`;
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    return await response.json();
-  } catch (error) {
-    console.error('Error sending document:', error);
-    await sendMessage(chatId, '⚠️ حدث خطأ في عرض الملف', token);
-  }
+  await sendMessage(chatId, stats, token, {
+    reply_markup: { keyboard: [['🔙 العودة']], resize_keyboard: true }
+  });
 }
 
 // ====================================================================
@@ -1390,44 +1418,6 @@ async function showApprovedUsers(chatId, token) {
 }
 
 // ====================================================================
-// ========== إحصائيات ==========
-// ====================================================================
-
-async function showStatistics(chatId, token) {
-  const stats = `📊 الإحصائيات العامة:
-
-👥 المستخدمين:
-• ✅ معتمدين: ${Object.keys(approvedUsers).length}
-• ⏳ معلق: ${Object.keys(pendingUsers).length}
-• ❌ مرفوض: ${Object.keys(rejectedUsers).length}
-
-📦 المحتوى:
-• 📦 مجموع: ${Object.keys(contentSystem.items).length}
-• 🖼️ صور: ${Object.values(contentSystem.items).filter(i => i.type === 'image').length}
-• 🎬 فيديو: ${Object.values(contentSystem.items).filter(i => i.type === 'video').length}
-• 📝 نصوص: ${Object.values(contentSystem.items).filter(i => i.type === 'text').length}
-
-🔗 الاشتراك الإجباري:
-• 📢 قنوات: ${mandatorySubscription.channels.length}
-• 👥 مجموعات: ${mandatorySubscription.groups.length}
-• 📌 الحالة: ${mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل'}
-
-⏱️ آخر تحديث: ${new Date().toLocaleString('ar-EG')}`;
-
-  await sendMessage(chatId, stats, token, {
-    reply_markup: { keyboard: [['🔙 العودة']], resize_keyboard: true }
-  });
-}
-
-// ====================================================================
-// ========== معالجة كولباك المستخدم ==========
-// ====================================================================
-
-async function handleUserCallback(data, chatId, token, userId) {
-  // لا يوجد كولباك للمستخدم في هذا الإصدار
-}
-
-// ====================================================================
 // ========== دوال مساعدة ==========
 // ====================================================================
 
@@ -1473,4 +1463,8 @@ async function answerCallbackQuery(callbackId, text, token) {
   } catch (error) {
     console.error('Error:', error);
   }
+}
+
+async function handleUserCallback(data, chatId, token, userId) {
+  // لا يوجد كولباك للمستخدم في هذا الإصدار
 }
