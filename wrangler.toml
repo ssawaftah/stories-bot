@@ -1,6 +1,10 @@
-name = "telegram-verification-bot"
+name = "telegram-story-bot"
 main = "worker.js"
 compatibility_date = "2024-01-01"
 
-# المتغيرات ستضاف من Cloudflare Dashboard مباشرة
-# لا تضع قيم حساسة هنا
+kv_namespaces = [
+  { binding = "BOT_KV", id = "7ca07328d8b942ffb398e4c04ad997bf" }
+]
+
+[vars]
+BOT_TOKEN = ""
