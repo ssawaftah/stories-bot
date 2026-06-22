@@ -1,7 +1,10 @@
 // تخزين مؤقت في الذاكرة
 const pendingUsers = {};
-const approvedUsers = {};
 const rejectedUsers = {};
+const approvedUsers = {};
+
+// حالة الأدمن
+let adminState = {};
 
 export default {
   async fetch(request, env) {
@@ -52,6 +55,35 @@ async function handleTelegramUpdate(update, env) {
     const userId = msg.from.id;
     const text = msg.text;
 
+    // ========== واجهة الأدمن ==========
+    if (userId.toString() === ADMIN_ID) {
+      // أمر /admin للدخول إلى لوحة التحكم
+      if (text === '/admin') {
+        return showAdminPanel(chatId, token);
+      }
+
+      // معالجة أزرار الأدمن النصية
+      if (text === '📋 الطلبات الجديدة') {
+        return showPendingRequests(chatId, token);
+      }
+
+      if (text === '❌ الطلبات المرفوضة') {
+        return showRejectedRequests(chatId, token);
+      }
+
+      if (text === '✅ المستخدمين المعتمدين') {
+        return showApprovedUsers(chatId, token);
+      }
+
+      if (text === '🔙 العودة للقائمة') {
+        return showAdminPanel(chatId, token);
+      }
+
+      // أي رسالة أخرى للأدمن
+      return sendMessage(chatId, 'استخدم الأزرار للتحكم في البوت', token);
+    }
+
+    // ========== واجهة المستخدم ==========
     // التحقق من أن المستخدم مرفوض
     if (rejectedUsers[userId]) {
       return sendMessage(chatId, 
@@ -59,7 +91,7 @@ async function handleTelegramUpdate(update, env) {
         token,
         {
           reply_markup: {
-            remove_keyboard: true  // إخفاء الكيبورد بالكامل
+            remove_keyboard: true
           }
         }
       );
@@ -91,13 +123,13 @@ async function handleTelegramUpdate(update, env) {
           token,
           {
             reply_markup: {
-              remove_keyboard: true  // إخفاء زر مشاركة الرقم
+              remove_keyboard: true
             }
           }
         );
       }
 
-      // طلب رقم الهاتف (للمستخدمين الجدد)
+      // طلب رقم الهاتف
       return sendMessage(chatId,
         '🔐 للتحقق، شارك رقم هاتفك:',
         token,
@@ -120,12 +152,10 @@ async function handleTelegramUpdate(update, env) {
     if (msg.contact) {
       const contact = msg.contact;
       
-      // التأكد من أن المستخدم يشارك رقمه الخاص
       if (contact.user_id !== userId) {
         return sendMessage(chatId, '❌ يرجى مشاركة رقم هاتفك الخاص فقط!', token);
       }
 
-      // التأكد من أنه ليس مرفوضاً مسبقاً
       if (rejectedUsers[userId]) {
         return sendMessage(chatId, 
           '❌ عذراً، طلبك مرفوض.\nللتواصل: @jahab',
@@ -138,7 +168,6 @@ async function handleTelegramUpdate(update, env) {
         );
       }
 
-      // التأكد من أنه ليس معتمداً مسبقاً
       if (approvedUsers[userId]) {
         return sendMessage(chatId, 
           '✅ أنت معتمد بالفعل! اضغط /start',
@@ -151,7 +180,7 @@ async function handleTelegramUpdate(update, env) {
         );
       }
 
-      // حفظ في الذاكرة المؤقتة
+      // حفظ في قائمة الانتظار
       pendingUsers[userId] = {
         id: userId,
         username: msg.from.username || 'لا يوجد',
@@ -160,45 +189,35 @@ async function handleTelegramUpdate(update, env) {
         time: new Date().toLocaleString('ar-EG')
       };
 
-      // إرسال للمستخدم مع إخفاء الكيبورد
       await sendMessage(chatId, 
         '⏳ تم استلام طلبك! جاري التحقق من قبل الإدارة...',
         token,
         {
           reply_markup: {
-            remove_keyboard: true  // إخفاء زر مشاركة الرقم فوراً
+            remove_keyboard: true
           }
         }
       );
 
-      // إرسال للأدمن
+      // إعلام الأدمن بطلب جديد
       const userInfo = pendingUsers[userId];
       const adminMsg = `
-👤 طلب انضمام جديد:
+📢 طلب انضمام جديد!
 
-الاسم: ${userInfo.name}
-اليوزرنيم: @${userInfo.username}
-رقم الهاتف: ${userInfo.phone}
-التاريخ: ${userInfo.time}
+👤 الاسم: ${userInfo.name}
+🆔 اليوزرنيم: @${userInfo.username}
+📱 رقم الهاتف: ${userInfo.phone}
+🕐 الوقت: ${userInfo.time}
 
-🆔 معرف المستخدم: ${userId}
+📌 عدد الطلبات المعلقة: ${Object.keys(pendingUsers).length}
       `;
 
-      await sendMessage(ADMIN_ID, adminMsg, token, {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ قبول', callback_data: `approve_${userId}` },
-              { text: '❌ رفض', callback_data: `reject_${userId}` }
-            ]
-          ]
-        }
-      });
+      await sendMessage(ADMIN_ID, adminMsg, token);
       
       return;
     }
 
-    // منع أي أمر آخر للمستخدمين غير المعتمدين أو المرفوضين
+    // منع أي أمر آخر للمستخدمين غير المعتمدين
     if (!approvedUsers[userId]) {
       if (rejectedUsers[userId]) {
         return sendMessage(chatId, 
@@ -242,7 +261,7 @@ async function handleTelegramUpdate(update, env) {
       );
     }
 
-    // هنا يصل فقط المستخدمون المعتمدون
+    // مستخدم معتمد - معالجة الأزرار
     if (text === '📚 قصص') {
       return sendMessage(chatId, '📖 قريباً... قسم القصص', token);
     }
@@ -253,16 +272,15 @@ async function handleTelegramUpdate(update, env) {
       return sendMessage(chatId, '📌 بوت القصص والمقاطع\nالإصدار 1.0\nللتواصل: @jahab', token);
     }
     
-    // أي رسالة أخرى من مستخدم معتمد
     return sendMessage(chatId, 'استخدم الأزرار للتنقل في البوت', token);
   }
 
-  // معالجة أزرار الأدمن
+  // ========== معالجة أزرار الكولباك ==========
   if (update.callback_query) {
     const query = update.callback_query;
     const userId = query.from.id;
     const data = query.data;
-    const adminChatId = query.message.chat.id;
+    const chatId = query.message.chat.id;
     const messageId = query.message.message_id;
 
     // التحقق من الأدمن
@@ -270,12 +288,14 @@ async function handleTelegramUpdate(update, env) {
       return answerCallbackQuery(query.id, '❌ هذا الإجراء للإدارة فقط!', token);
     }
 
-    const [action, targetId] = data.split('_');
-
-    if (action === 'approve') {
-      // قبول المستخدم
+    // ===== معالجة قبول/رفض من قائمة الطلبات =====
+    if (data.startsWith('approve_')) {
+      const targetId = data.split('_')[1];
+      
       if (pendingUsers[targetId]) {
+        // نقل من المعلق إلى المعتمد
         approvedUsers[targetId] = true;
+        const userInfo = pendingUsers[targetId];
         delete pendingUsers[targetId];
         delete rejectedUsers[targetId];
         
@@ -285,61 +305,368 @@ async function handleTelegramUpdate(update, env) {
           token,
           {
             reply_markup: {
-              remove_keyboard: true  // إخفاء أي كيبورد موجود
+              remove_keyboard: true
             }
           }
         );
         
         // تحديث رسالة الأدمن
-        await editMessage(adminChatId, messageId, 
-          '✅ ✅ تم قبول المستخدم بنجاح',
+        await editMessage(chatId, messageId, 
+          `✅ تم قبول المستخدم: ${userInfo.name}\n🆔 @${userInfo.username}`,
           token
         );
+        
+        // تحديث لوحة الأدمن
+        await showAdminPanel(chatId, token, true);
         
         return answerCallbackQuery(query.id, '✅ تم قبول المستخدم', token);
       } else {
         return answerCallbackQuery(query.id, '⚠️ المستخدم غير موجود في قائمة الانتظار', token);
       }
+    }
+
+    if (data.startsWith('reject_')) {
+      const targetId = data.split('_')[1];
       
-    } else if (action === 'reject') {
-      // رفض المستخدم
       if (pendingUsers[targetId]) {
+        // نقل من المعلق إلى المرفوض
         rejectedUsers[targetId] = true;
+        const userInfo = pendingUsers[targetId];
         delete pendingUsers[targetId];
         delete approvedUsers[targetId];
         
-        // إرسال للمستخدم مع إخفاء الكيبورد
+        // إرسال للمستخدم
         await sendMessage(targetId, 
           '❌ عذراً، تم رفض طلب انضمامك.\nإذا كان لديك استفسار، تواصل مع الإدارة عبر @jahab',
           token,
           {
             reply_markup: {
-              remove_keyboard: true  // إخفاء الكيبورد بالكامل
+              remove_keyboard: true
             }
           }
         );
         
         // تحديث رسالة الأدمن
-        await editMessage(adminChatId, messageId, 
-          '❌ ❌ تم رفض المستخدم',
+        await editMessage(chatId, messageId, 
+          `❌ تم رفض المستخدم: ${userInfo.name}\n🆔 @${userInfo.username}`,
           token
         );
+        
+        // تحديث لوحة الأدمن
+        await showAdminPanel(chatId, token, true);
         
         return answerCallbackQuery(query.id, '❌ تم رفض المستخدم', token);
       } else {
         return answerCallbackQuery(query.id, '⚠️ المستخدم غير موجود في قائمة الانتظار', token);
       }
     }
+
+    // ===== معالجة قبول من قائمة المرفوضين =====
+    if (data.startsWith('reapprove_')) {
+      const targetId = data.split('_')[1];
+      
+      if (rejectedUsers[targetId]) {
+        // نقل من المرفوض إلى المعتمد
+        approvedUsers[targetId] = true;
+        const userInfo = rejectedUsers[targetId];
+        delete rejectedUsers[targetId];
+        delete pendingUsers[targetId];
+        
+        // إرسال للمستخدم
+        await sendMessage(targetId, 
+          '✅ تم استئناف طلبك والموافقة عليه!\nاضغط /start للبدء.',
+          token,
+          {
+            reply_markup: {
+              remove_keyboard: true
+            }
+          }
+        );
+        
+        // تحديث رسالة الأدمن
+        await editMessage(chatId, messageId, 
+          `✅ تم إعادة الموافقة على المستخدم: ${userInfo.name}\n🆔 @${userInfo.username}`,
+          token
+        );
+        
+        // تحديث لوحة الأدمن
+        await showAdminPanel(chatId, token, true);
+        
+        return answerCallbackQuery(query.id, '✅ تم إعادة الموافقة', token);
+      } else {
+        return answerCallbackQuery(query.id, '⚠️ المستخدم غير موجود في قائمة المرفوضين', token);
+      }
+    }
+
+    // ===== معالجة عرض التفاصيل =====
+    if (data.startsWith('details_')) {
+      const targetId = data.split('_')[1];
+      let userInfo = pendingUsers[targetId] || rejectedUsers[targetId] || approvedUsers[targetId];
+      
+      if (userInfo) {
+        const status = pendingUsers[targetId] ? '⏳ قيد الانتظار' : 
+                      rejectedUsers[targetId] ? '❌ مرفوض' : '✅ معتمد';
+        
+        const details = `
+📋 تفاصيل المستخدم:
+
+👤 الاسم: ${userInfo.name}
+🆔 اليوزرنيم: @${userInfo.username}
+📱 رقم الهاتف: ${userInfo.phone}
+🕐 تاريخ الطلب: ${userInfo.time}
+📌 الحالة: ${status}
+🆔 المعرف: ${targetId}
+        `;
+        
+        await sendMessage(chatId, details, token);
+        return answerCallbackQuery(query.id, '✅ تم عرض التفاصيل', token);
+      } else {
+        return answerCallbackQuery(query.id, '⚠️ المستخدم غير موجود', token);
+      }
+    }
+
+    // ===== معالجة حذف من المرفوضين =====
+    if (data.startsWith('delete_')) {
+      const targetId = data.split('_')[1];
+      
+      if (rejectedUsers[targetId]) {
+        delete rejectedUsers[targetId];
+        
+        await editMessage(chatId, messageId, 
+          `🗑️ تم حذف المستخدم من قائمة المرفوضين`,
+          token
+        );
+        
+        // تحديث لوحة الأدمن
+        await showAdminPanel(chatId, token, true);
+        
+        return answerCallbackQuery(query.id, '🗑️ تم الحذف', token);
+      } else {
+        return answerCallbackQuery(query.id, '⚠️ المستخدم غير موجود', token);
+      }
+    }
+
+    // ===== معالجة أزرار التنقل =====
+    if (data === 'show_pending') {
+      await showPendingRequests(chatId, token);
+      return answerCallbackQuery(query.id, '📋 عرض الطلبات', token);
+    }
+    
+    if (data === 'show_rejected') {
+      await showRejectedRequests(chatId, token);
+      return answerCallbackQuery(query.id, '❌ عرض المرفوضين', token);
+    }
+    
+    if (data === 'show_approved') {
+      await showApprovedUsers(chatId, token);
+      return answerCallbackQuery(query.id, '✅ عرض المعتمدين', token);
+    }
+    
+    if (data === 'back_to_admin') {
+      await showAdminPanel(chatId, token);
+      return answerCallbackQuery(query.id, '🔙 العودة للقائمة', token);
+    }
   }
 }
 
-// دوال مساعدة
+// ========== دوال واجهة الأدمن ==========
+
+// عرض لوحة التحكم الرئيسية
+async function showAdminPanel(chatId, token, silent = false) {
+  const pendingCount = Object.keys(pendingUsers).length;
+  const rejectedCount = Object.keys(rejectedUsers).length;
+  const approvedCount = Object.keys(approvedUsers).length;
+
+  const message = `
+👋 مرحباً بك في لوحة تحكم الأدمن
+
+📊 إحصائيات البوت:
+• 📋 طلبات جديدة: ${pendingCount}
+• ❌ مرفوضين: ${rejectedCount}
+• ✅ معتمدين: ${approvedCount}
+
+اختر الإجراء المناسب:
+  `;
+
+  const options = {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: `📋 الطلبات الجديدة (${pendingCount})`, callback_data: 'show_pending' }],
+        [{ text: `❌ المرفوضين (${rejectedCount})`, callback_data: 'show_rejected' }],
+        [{ text: `✅ المعتمدين (${approvedCount})`, callback_data: 'show_approved' }]
+      ]
+    }
+  };
+
+  if (silent) {
+    await editMessage(chatId, null, message, token, options);
+  } else {
+    await sendMessage(chatId, message, token, options);
+  }
+}
+
+// عرض الطلبات الجديدة
+async function showPendingRequests(chatId, token) {
+  const pendingList = Object.values(pendingUsers);
+  
+  if (pendingList.length === 0) {
+    return sendMessage(chatId, 
+      '📋 لا توجد طلبات جديدة حالياً',
+      token,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]
+          ]
+        }
+      }
+    );
+  }
+
+  let message = '📋 قائمة الطلبات الجديدة:\n\n';
+  
+  // عرض أول 10 طلبات فقط (لعدم تجاوز حد الطول)
+  const displayList = pendingList.slice(0, 10);
+  
+  for (const user of displayList) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n🕐 ${user.time}\n`;
+    message += `─────────────────\n`;
+  }
+
+  if (pendingList.length > 10) {
+    message += `\n⚠️ يوجد ${pendingList.length - 10} طلبات أخرى...`;
+  }
+
+  // إنشاء أزرار لكل مستخدم
+  const buttons = [];
+  for (const user of pendingList) {
+    buttons.push([
+      { text: `✅ قبول ${user.name}`, callback_data: `approve_${user.id}` },
+      { text: `❌ رفض ${user.name}`, callback_data: `reject_${user.id}` }
+    ]);
+    buttons.push([
+      { text: `📋 تفاصيل ${user.name}`, callback_data: `details_${user.id}` }
+    ]);
+  }
+  
+  buttons.push([{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+// عرض المرفوضين
+async function showRejectedRequests(chatId, token) {
+  const rejectedList = Object.values(rejectedUsers);
+  
+  if (rejectedList.length === 0) {
+    return sendMessage(chatId, 
+      '❌ لا يوجد مستخدمين مرفوضين',
+      token,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]
+          ]
+        }
+      }
+    );
+  }
+
+  let message = '❌ قائمة المستخدمين المرفوضين:\n\n';
+  
+  const displayList = rejectedList.slice(0, 10);
+  
+  for (const user of displayList) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n🕐 ${user.time}\n`;
+    message += `─────────────────\n`;
+  }
+
+  if (rejectedList.length > 10) {
+    message += `\n⚠️ يوجد ${rejectedList.length - 10} مرفوضين آخرين...`;
+  }
+
+  // إنشاء أزرار للمرفوضين (تتيح الموافقة مرة أخرى)
+  const buttons = [];
+  for (const user of rejectedList) {
+    buttons.push([
+      { text: `✅ إعادة موافقة ${user.name}`, callback_data: `reapprove_${user.id}` },
+      { text: `🗑️ حذف ${user.name}`, callback_data: `delete_${user.id}` }
+    ]);
+    buttons.push([
+      { text: `📋 تفاصيل ${user.name}`, callback_data: `details_${user.id}` }
+    ]);
+  }
+  
+  buttons.push([{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+// عرض المعتمدين
+async function showApprovedUsers(chatId, token) {
+  const approvedList = Object.values(approvedUsers);
+  
+  if (approvedList.length === 0) {
+    return sendMessage(chatId, 
+      '✅ لا يوجد مستخدمين معتمدين',
+      token,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]
+          ]
+        }
+      }
+    );
+  }
+
+  let message = '✅ قائمة المستخدمين المعتمدين:\n\n';
+  
+  const displayList = approvedList.slice(0, 10);
+  
+  for (const user of displayList) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n🕐 ${user.time}\n`;
+    message += `─────────────────\n`;
+  }
+
+  if (approvedList.length > 10) {
+    message += `\n⚠️ يوجد ${approvedList.length - 10} معتمدين آخرين...`;
+  }
+
+  // أزرار لعرض التفاصيل
+  const buttons = [];
+  for (const user of approvedList.slice(0, 5)) {
+    buttons.push([
+      { text: `📋 تفاصيل ${user.name}`, callback_data: `details_${user.id}` }
+    ]);
+  }
+  
+  buttons.push([{ text: '🔙 العودة للقائمة', callback_data: 'back_to_admin' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+// ========== دوال مساعدة ==========
+
 async function sendMessage(chatId, text, token, options = {}) {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   
   const payload = {
     chat_id: chatId,
     text: text,
+    parse_mode: 'HTML',
     ...options
   };
 
@@ -355,18 +682,25 @@ async function sendMessage(chatId, text, token, options = {}) {
   }
 }
 
-async function editMessage(chatId, messageId, text, token) {
+async function editMessage(chatId, messageId, text, token, options = {}) {
   const url = `https://api.telegram.org/bot${token}/editMessageText`;
   
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML',
+    ...options
+  };
+
+  if (messageId) {
+    payload.message_id = messageId;
+  }
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        message_id: messageId,
-        text: text
-      })
+      body: JSON.stringify(payload)
     });
     return await response.json();
   } catch (error) {
