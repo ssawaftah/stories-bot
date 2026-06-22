@@ -3,11 +3,16 @@ const pendingUsers = {};
 const rejectedUsers = {};
 const approvedUsers = {};
 
-// ========== نظام إدارة الواجهة الرئيسية ==========
+// ========== نظام الواجهة الرئيسية ==========
 const mainInterface = {
-  structure: {},    // تخزين المجلدات والأقسام والأزرار
-  order: [],        // ترتيب العناصر في الواجهة الرئيسية
-  content: {}       // تخزين محتوى الأقسام (عناوين ومحتوى)
+  structure: {},    // المجلدات والأقسام والأزرار
+  order: []         // ترتيب العناصر
+};
+
+// ========== نظام المحتوى ==========
+const contentSystem = {
+  sections: {},     // محتوى الأقسام
+  // كل قسم يحتوي على: { title: '', items: [{id, title, content, type}], settings: {} }
 };
 
 // ========== حالة الأدمن ==========
@@ -171,30 +176,34 @@ async function handleTelegramUpdate(update, env) {
   }
 }
 
-// ========== دوال واجهة الأدمن ==========
+// ====================================================================
+// ========== قائمة الأدمن الرئيسية ==========
+// ====================================================================
 
 async function showAdminMainMenu(chatId, token) {
   const pendingCount = Object.keys(pendingUsers).length;
   const rejectedCount = Object.keys(rejectedUsers).length;
   const approvedCount = Object.keys(approvedUsers).length;
   const interfaceCount = Object.keys(mainInterface.structure).length;
+  const contentCount = Object.keys(contentSystem.sections).length;
 
   const message = `👋 مرحباً بك في لوحة التحكم
 
-📊 الإحصائيات:
+📊 الإحصائيات العامة:
 • 📋 طلبات جديدة: ${pendingCount}
 • ❌ مرفوضين: ${rejectedCount}
 • ✅ معتمدين: ${approvedCount}
-• 📂 عناصر الواجهة: ${interfaceCount}
+• 🎯 عناصر الواجهة: ${interfaceCount}
+• 📝 أقسام المحتوى: ${contentCount}
 
-📌 اختر الإجراء المناسب:`;
+📌 اختر الإدارة المناسبة:`;
 
   await sendMessage(chatId, message, token, {
     reply_markup: {
       keyboard: [
         ['📋 إدارة الطلبات', '🎯 إدارة الواجهة'],
-        ['📊 الإحصائيات', '📢 إرسال إشعار'],
-        ['🔙 العودة']
+        ['📝 إدارة المحتوى', '📊 الإحصائيات'],
+        ['📢 إرسال إشعار', '🔙 العودة']
       ],
       resize_keyboard: true
     }
@@ -211,6 +220,10 @@ async function handleAdminActions(chatId, text, token) {
       await showInterfaceManagement(chatId, token);
       break;
       
+    case '📝 إدارة المحتوى':
+      await showContentManagementMain(chatId, token);
+      break;
+      
     case '📊 الإحصائيات':
       await showStatistics(chatId, token);
       break;
@@ -225,12 +238,6 @@ async function handleAdminActions(chatId, text, token) {
       
     case '🔙 العودة':
     case 'رجوع':
-      adminState.currentAction = null;
-      adminState.step = null;
-      adminState.tempData = {};
-      await showAdminMainMenu(chatId, token);
-      break;
-      
     case '🔙 إلغاء':
       adminState.currentAction = null;
       adminState.step = null;
@@ -239,41 +246,36 @@ async function handleAdminActions(chatId, text, token) {
       break;
       
     default:
-      await handleAdminInterfaceActions(chatId, text, token);
+      await handleAdminSubActions(chatId, text, token);
       break;
   }
 }
 
+// ====================================================================
 // ========== إدارة الطلبات ==========
+// ====================================================================
 
 async function showRequestsManagement(chatId, token) {
   const pendingList = Object.values(pendingUsers);
+  const rejectedList = Object.values(rejectedUsers);
   
-  if (pendingList.length === 0) {
-    await sendMessage(chatId, '📋 لا توجد طلبات جديدة', token, {
-      reply_markup: { inline_keyboard: [[{ text: '🔙 رجوع', callback_data: 'admin_back' }]] }
-    });
-    return;
-  }
+  let message = `📋 إدارة الطلبات\n\n📌 المعلقة: ${pendingList.length}\n❌ المرفوضة: ${rejectedList.length}\n\nاختر القائمة:`;
 
-  let message = '📋 الطلبات الجديدة:\n\n';
-  const buttons = [];
-  
-  for (const user of pendingList) {
-    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
-    buttons.push([
-      { text: `✅ قبول ${user.name}`, callback_data: `approve_${user.id}` },
-      { text: `❌ رفض`, callback_data: `reject_${user.id}` }
-    ]);
-  }
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_back' }]);
+  const buttons = [
+    [{ text: `📋 الطلبات المعلقة (${pendingList.length})`, callback_data: 'show_pending' }],
+    [{ text: `❌ المرفوضين (${rejectedList.length})`, callback_data: 'show_rejected' }],
+    [{ text: `✅ المعتمدين (${Object.keys(approvedUsers).length})`, callback_data: 'show_approved' }],
+    [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+  ];
 
   await sendMessage(chatId, message, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
 
+// ====================================================================
 // ========== إدارة الواجهة الرئيسية ==========
+// ====================================================================
 
 async function showInterfaceManagement(chatId, token) {
   const folders = Object.values(mainInterface.structure).filter(c => c.type === 'folder').length;
@@ -282,152 +284,36 @@ async function showInterfaceManagement(chatId, token) {
   
   const message = `🎯 إدارة الواجهة الرئيسية
 
-📊 الإحصائيات:
+📊 إحصائيات العناصر:
 • 📁 مجلدات: ${folders}
 • 📂 أقسام: ${sections}
 • 🔘 أزرار: ${buttons}
 • 📌 مجموع: ${Object.keys(mainInterface.structure).length}
 
-🔹 إنشاء عنصر جديد:
+🔹 إنشاء:
 • 📁 مجلد جديد
 • 📂 قسم جديد
 • 🔘 زر جديد
 
-🔸 إدارة العناصر:
+🔸 إدارة:
 • ✏️ تعديل عنصر
 • 🗑️ حذف عنصر
 • 📊 ترتيب العناصر
-• 📂 نقل قسم لمجلد
-
-📝 إدارة المحتوى:
-• ➕ إضافة محتوى
-• ✏️ تعديل محتوى
-• 🗑️ حذف محتوى`;
+• 📂 نقل قسم لمجلد`;
 
   await sendMessage(chatId, message, token, {
     reply_markup: {
       keyboard: [
         ['📁 إنشاء مجلد', '📂 إنشاء قسم', '🔘 إنشاء زر'],
         ['✏️ تعديل عنصر', '🗑️ حذف عنصر', '📊 ترتيب العناصر'],
-        ['📂 نقل قسم لمجلد', '➕ إدارة المحتوى'],
-        ['🔙 رجوع']
+        ['📂 نقل قسم لمجلد', '🔙 رجوع']
       ],
       resize_keyboard: true
     }
   });
 }
 
-async function handleAdminInterfaceActions(chatId, text, token) {
-  // ===== إنشاء مجلد =====
-  if (text === '📁 إنشاء مجلد') {
-    adminState.currentAction = 'create_folder';
-    adminState.step = 'waiting_name';
-    await sendMessage(chatId, '📁 أدخل اسم المجلد الجديد:', token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-    return;
-  }
-
-  // ===== إنشاء قسم =====
-  if (text === '📂 إنشاء قسم') {
-    adminState.currentAction = 'create_section';
-    adminState.step = 'waiting_name';
-    await sendMessage(chatId, '📂 أدخل اسم القسم الجديد:', token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-    return;
-  }
-
-  // ===== إنشاء زر =====
-  if (text === '🔘 إنشاء زر') {
-    adminState.currentAction = 'create_button';
-    adminState.step = 'waiting_name';
-    await sendMessage(chatId, '🔘 أدخل اسم الزر الجديد:', token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-    return;
-  }
-
-  // ===== تعديل عنصر =====
-  if (text === '✏️ تعديل عنصر') {
-    await showEditElement(chatId, token);
-    return;
-  }
-
-  // ===== حذف عنصر =====
-  if (text === '🗑️ حذف عنصر') {
-    await showDeleteElement(chatId, token);
-    return;
-  }
-
-  // ===== ترتيب العناصر =====
-  if (text === '📊 ترتيب العناصر') {
-    await showReorderElements(chatId, token);
-    return;
-  }
-
-  // ===== نقل قسم لمجلد =====
-  if (text === '📂 نقل قسم لمجلد') {
-    await showMoveSectionToFolder(chatId, token);
-    return;
-  }
-
-  // ===== إدارة المحتوى =====
-  if (text === '➕ إدارة المحتوى') {
-    await showContentManagement(chatId, token);
-    return;
-  }
-
-  // ===== معالجة إنشاء العناصر =====
-  if (adminState.currentAction === 'create_folder' && adminState.step === 'waiting_name') {
-    await handleCreateFolder(chatId, text, token);
-  } else if (adminState.currentAction === 'create_section' && adminState.step === 'waiting_name') {
-    adminState.tempData.name = text;
-    adminState.step = 'waiting_content';
-    await sendMessage(chatId, `📝 أدخل محتوى القسم "${text}":\n(يمكنك إرسال نص أو فيديو أو صورة)`, token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-  } else if (adminState.currentAction === 'create_button' && adminState.step === 'waiting_name') {
-    adminState.tempData.name = text;
-    adminState.step = 'waiting_content';
-    await sendMessage(chatId, `🔘 أدخل محتوى الزر "${text}":`, token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-  } else if (adminState.currentAction === 'create_section' && adminState.step === 'waiting_content') {
-    await handleCreateSectionContent(chatId, text, token);
-  } else if (adminState.currentAction === 'create_button' && adminState.step === 'waiting_content') {
-    await handleCreateButtonContent(chatId, text, token);
-  } else if (adminState.currentAction === 'edit_element' && adminState.step === 'waiting_new_name') {
-    await handleEditElementName(chatId, text, token);
-  } else if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_new_content') {
-    await handleEditContent(chatId, text, token);
-  } else if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_title') {
-    adminState.tempData.title = text;
-    adminState.step = 'waiting_content_item';
-    await sendMessage(chatId, `📝 أرسل محتوى "${text}":\n(نص أو فيديو أو صورة)`, token, {
-      reply_markup: { 
-        keyboard: [
-          ['✅ تم الانتهاء'],
-          ['🔙 إلغاء']
-        ], 
-        resize_keyboard: true 
-      }
-    });
-  } else if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content_item') {
-    await handleAddContentItem(chatId, text, token);
-  } else if (text === '✅ تم الانتهاء' && adminState.currentAction === 'add_content') {
-    await finishAddingContent(chatId, token);
-  } else if (text === '🔙 إلغاء') {
-    adminState.currentAction = null;
-    adminState.step = null;
-    adminState.tempData = {};
-    await showAdminMainMenu(chatId, token);
-  } else {
-    await sendMessage(chatId, '⚠️ خيار غير معروف', token);
-  }
-}
-
-// ========== إنشاء العناصر ==========
+// ========== إنشاء عناصر الواجهة ==========
 
 async function handleCreateFolder(chatId, text, token) {
   if (!text || text.trim() === '') {
@@ -453,55 +339,68 @@ async function handleCreateFolder(chatId, text, token) {
   await showInterfaceManagement(chatId, token);
 }
 
-async function handleCreateSectionContent(chatId, text, token) {
-  const name = adminState.tempData.name;
-  
+async function handleCreateSection(chatId, text, token) {
   if (!text || text.trim() === '') {
-    await sendMessage(chatId, '⚠️ الرجاء إدخال محتوى:', token);
+    await sendMessage(chatId, '⚠️ الرجاء إدخال اسم صالح:', token);
     return;
   }
 
-  mainInterface.structure[name] = { 
-    type: 'section', 
-    content: text,
-    items: [],
+  if (mainInterface.structure[text]) {
+    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
+    return;
+  }
+
+  // التحقق من وجود محتوى لهذا القسم
+  if (!contentSystem.sections[text]) {
+    contentSystem.sections[text] = {
+      title: text,
+      items: [],
+      settings: {},
+      created: new Date().toLocaleString('ar-EG')
+    };
+  }
+
+  mainInterface.structure[text] = { 
+    type: 'section',
+    contentId: text,
     created: new Date().toLocaleString('ar-EG')
   };
-  mainInterface.order.push(name);
+  mainInterface.order.push(text);
 
-  // عرض خيار نقل لمجلد
-  const folders = Object.keys(mainInterface.structure).filter(
-    key => mainInterface.structure[key].type === 'folder'
+  await sendMessage(chatId, 
+    `✅ تم إنشاء القسم "${text}" بنجاح!\n\n📝 يمكنك الآن إضافة محتوى له من قسم "إدارة المحتوى"`,
+    token
   );
-
-  if (folders.length > 0) {
-    const buttons = folders.map(folder => [
-      { text: `📁 ${folder}`, callback_data: `move_section_${name}_${folder}` }
-    ]);
-    buttons.push([{ text: '🚫 عدم النقل', callback_data: `skip_move_${name}` }]);
-
-    await sendMessage(chatId, 
-      `✅ تم إنشاء القسم "${name}"!\n📌 هل تريد نقله لمجلد؟`,
-      token,
-      { reply_markup: { inline_keyboard: buttons } }
-    );
-  } else {
-    await sendMessage(chatId, `✅ تم إنشاء القسم "${name}"`, token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    adminState.tempData = {};
-    await showInterfaceManagement(chatId, token);
-  }
+  
+  adminState.currentAction = null;
+  adminState.step = null;
+  await showInterfaceManagement(chatId, token);
 }
 
-async function handleCreateButtonContent(chatId, text, token) {
-  const name = adminState.tempData.name;
-  
+async function handleCreateButton(chatId, text, token) {
   if (!text || text.trim() === '') {
-    await sendMessage(chatId, '⚠️ الرجاء إدخال محتوى:', token);
+    await sendMessage(chatId, '⚠️ الرجاء إدخال اسم صالح:', token);
     return;
   }
 
+  if (mainInterface.structure[text]) {
+    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
+    return;
+  }
+
+  adminState.tempData.buttonName = text;
+  adminState.step = 'waiting_button_content';
+  
+  await sendMessage(chatId, 
+    `🔘 أدخل محتوى الزر "${text}":\n(يمكنك استخدام HTML للتنسيق)`,
+    token,
+    { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
+  );
+}
+
+async function handleSaveButton(chatId, text, token) {
+  const name = adminState.tempData.buttonName;
+  
   mainInterface.structure[name] = { 
     type: 'button', 
     content: text,
@@ -516,7 +415,7 @@ async function handleCreateButtonContent(chatId, text, token) {
   await showInterfaceManagement(chatId, token);
 }
 
-// ========== تعديل العناصر ==========
+// ========== تعديل وحذف وترتيب العناصر ==========
 
 async function showEditElement(chatId, token) {
   const list = Object.keys(mainInterface.structure);
@@ -537,48 +436,6 @@ async function showEditElement(chatId, token) {
   });
 }
 
-async function handleEditElementName(chatId, text, token) {
-  const oldName = adminState.tempData.oldName;
-  const element = mainInterface.structure[oldName];
-  
-  if (!element) {
-    await sendMessage(chatId, '⚠️ العنصر غير موجود!', token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    return;
-  }
-
-  if (mainInterface.structure[text] && text !== oldName) {
-    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
-    return;
-  }
-
-  delete mainInterface.structure[oldName];
-  mainInterface.structure[text] = element;
-  
-  const index = mainInterface.order.indexOf(oldName);
-  if (index !== -1) mainInterface.order[index] = text;
-
-  // تحديث في المجلدات
-  for (const key of Object.keys(mainInterface.structure)) {
-    if (mainInterface.structure[key].type === 'folder') {
-      const children = mainInterface.structure[key].children;
-      const childIndex = children.indexOf(oldName);
-      if (childIndex !== -1) {
-        children[childIndex] = text;
-      }
-    }
-  }
-
-  await sendMessage(chatId, `✅ تم تعديل الاسم إلى "${text}"`, token);
-  adminState.currentAction = null;
-  adminState.step = null;
-  adminState.tempData = {};
-  await showInterfaceManagement(chatId, token);
-}
-
-// ========== حذف العناصر ==========
-
 async function showDeleteElement(chatId, token) {
   const list = Object.keys(mainInterface.structure);
   if (list.length === 0) {
@@ -597,8 +454,6 @@ async function showDeleteElement(chatId, token) {
     reply_markup: { inline_keyboard: buttons }
   });
 }
-
-// ========== ترتيب العناصر ==========
 
 async function showReorderElements(chatId, token) {
   if (mainInterface.order.length === 0) {
@@ -625,8 +480,6 @@ async function showReorderElements(chatId, token) {
   });
 }
 
-// ========== نقل قسم لمجلد ==========
-
 async function showMoveSectionToFolder(chatId, token) {
   const sections = Object.keys(mainInterface.structure).filter(
     key => mainInterface.structure[key].type === 'section'
@@ -642,7 +495,7 @@ async function showMoveSectionToFolder(chatId, token) {
   }
 
   if (folders.length === 0) {
-    await sendMessage(chatId, '⚠️ لا توجد مجلدات لنقل الأقسام إليها', token);
+    await sendMessage(chatId, '⚠️ لا توجد مجلدات', token);
     return;
   }
 
@@ -656,74 +509,96 @@ async function showMoveSectionToFolder(chatId, token) {
   });
 }
 
-// ========== إدارة المحتوى ==========
+// ====================================================================
+// ========== إدارة المحتوى المتقدمة ==========
+// ====================================================================
 
-async function showContentManagement(chatId, token) {
-  const sections = Object.keys(mainInterface.structure).filter(
-    key => mainInterface.structure[key].type === 'section'
-  );
+async function showContentManagementMain(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  const totalItems = sections.reduce((sum, key) => sum + (contentSystem.sections[key].items?.length || 0), 0);
 
-  if (sections.length === 0) {
-    await sendMessage(chatId, '⚠️ لا توجد أقسام لإدارة محتواها', token);
-    return;
-  }
+  const message = `📝 إدارة المحتوى
 
-  const buttons = sections.map(section => [
-    { text: `📂 ${section}`, callback_data: `manage_content_${section}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_interface_back' }]);
+📊 الإحصائيات:
+• 📂 أقسام: ${sections.length}
+• 📄 عناصر محتوى: ${totalItems}
 
-  await sendMessage(chatId, '📝 اختر القسم لإدارة محتواه:', token, {
-    reply_markup: { inline_keyboard: buttons }
+🔹 إدارة الأقسام:
+• 📂 إنشاء قسم محتوى جديد
+• ✏️ تعديل قسم محتوى
+• 🗑️ حذف قسم محتوى
+
+🔸 إدارة المحتوى:
+• ➕ إضافة محتوى
+• ✏️ تعديل محتوى
+• 🗑️ حذف محتوى
+• 📊 ترتيب المحتوى
+• 📋 نسخ محتوى`;
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      keyboard: [
+        ['📂 إنشاء قسم محتوى', '✏️ تعديل قسم محتوى', '🗑️ حذف قسم محتوى'],
+        ['➕ إضافة محتوى', '✏️ تعديل محتوى', '🗑️ حذف محتوى'],
+        ['📊 ترتيب المحتوى', '📋 نسخ محتوى'],
+        ['🔙 رجوع']
+      ],
+      resize_keyboard: true
+    }
   });
 }
 
-async function showSectionContentManagement(chatId, sectionName, token) {
-  const section = mainInterface.structure[sectionName];
-  if (!section || section.type !== 'section') {
-    await sendMessage(chatId, '⚠️ القسم غير موجود', token);
+// ========== إنشاء قسم محتوى ==========
+
+async function handleCreateContentSection(chatId, text, token) {
+  if (!text || text.trim() === '') {
+    await sendMessage(chatId, '⚠️ الرجاء إدخال اسم صالح:', token);
     return;
   }
 
-  const items = section.items || [];
-  let message = `📂 إدارة محتوى "${sectionName}"\n\n`;
-  message += `📊 عدد العناصر: ${items.length}\n\n`;
-
-  if (items.length > 0) {
-    message += '📋 العناصر:\n';
-    items.forEach((item, index) => {
-      message += `${index + 1}. ${item.title}\n`;
-    });
+  if (contentSystem.sections[text]) {
+    await sendMessage(chatId, '⚠️ هذا القسم موجود بالفعل!', token);
+    return;
   }
 
-  const buttons = [
-    [{ text: '➕ إضافة محتوى', callback_data: `add_content_${sectionName}` }],
-    [{ text: '✏️ تعديل محتوى', callback_data: `edit_content_list_${sectionName}` }],
-    [{ text: '🗑️ حذف محتوى', callback_data: `delete_content_list_${sectionName}` }],
-    [{ text: '🔙 رجوع', callback_data: 'admin_interface_back' }]
-  ];
+  contentSystem.sections[text] = {
+    title: text,
+    items: [],
+    settings: {
+      allowComments: false,
+      showDate: true
+    },
+    created: new Date().toLocaleString('ar-EG')
+  };
 
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
+  await sendMessage(chatId, `✅ تم إنشاء قسم المحتوى "${text}" بنجاح!`, token);
+  adminState.currentAction = null;
+  adminState.step = null;
+  await showContentManagementMain(chatId, token);
 }
 
 // ========== إضافة محتوى ==========
 
-async function handleAddContent(chatId, sectionName, token) {
-  adminState.currentAction = 'add_content';
-  adminState.step = 'waiting_title';
-  adminState.tempData.sectionName = sectionName;
-  adminState.tempData.contentItems = [];
+async function showAddContent(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى! أنشئ قسم أولاً.', token);
+    return;
+  }
 
-  await sendMessage(chatId, `📝 أدخل عنوان المحتوى الجديد للقسم "${sectionName}":`, token, {
-    reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
+  const buttons = sections.map(section => [
+    { text: `📂 ${section}`, callback_data: `add_content_select_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '📂 اختر القسم لإضافة محتوى:', token, {
+    reply_markup: { inline_keyboard: buttons }
   });
 }
 
-async function handleAddContentItem(chatId, text, token) {
-  if (text === '✅ تم الانتهاء') {
-    await finishAddingContent(chatId, token);
+async function handleAddContentItems(chatId, text, token) {
+  if (text === '✅ حفظ الكل') {
+    await saveContentItems(chatId, token);
     return;
   }
 
@@ -731,63 +606,306 @@ async function handleAddContentItem(chatId, text, token) {
     adminState.currentAction = null;
     adminState.step = null;
     adminState.tempData = {};
-    await showAdminMainMenu(chatId, token);
+    await showContentManagementMain(chatId, token);
     return;
   }
 
-  // حفظ المحتوى المؤقت
-  if (!adminState.tempData.contentItems) {
-    adminState.tempData.contentItems = [];
+  // حفظ العنوان أولاً
+  if (adminState.step === 'waiting_content_title') {
+    adminState.tempData.currentTitle = text;
+    adminState.step = 'waiting_content_body';
+    await sendMessage(chatId, 
+      `📝 أدخل محتوى "${text}":\n(يمكنك إرسال نص أو فيديو أو صورة)`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [
+            ['✅ حفظ الكل'],
+            ['🔙 إلغاء']
+          ], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
   }
-  
-  adminState.tempData.contentItems.push({
-    title: adminState.tempData.title || 'بدون عنوان',
-    content: text
-  });
 
-  await sendMessage(chatId, `✅ تم إضافة المحتوى!\n📝 أرسل المحتوى التالي أو اضغط "تم الانتهاء":`, token, {
-    reply_markup: { 
-      keyboard: [
-        ['✅ تم الانتهاء'],
-        ['🔙 إلغاء']
-      ], 
-      resize_keyboard: true 
+  // حفظ المحتوى
+  if (adminState.step === 'waiting_content_body') {
+    if (!adminState.tempData.items) {
+      adminState.tempData.items = [];
     }
-  });
+    
+    adminState.tempData.items.push({
+      id: Date.now() + Math.random(),
+      title: adminState.tempData.currentTitle || 'بدون عنوان',
+      content: text,
+      type: detectContentType(text),
+      created: new Date().toLocaleString('ar-EG')
+    });
+
+    await sendMessage(chatId, 
+      `✅ تم إضافة "${adminState.tempData.currentTitle}"\n\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [
+            ['✅ حفظ الكل'],
+            ['🔙 إلغاء']
+          ], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    
+    adminState.step = 'waiting_content_title';
+    return;
+  }
 }
 
-async function finishAddingContent(chatId, token) {
+function detectContentType(text) {
+  if (text.startsWith('http') && (text.includes('youtube') || text.includes('youtu.be'))) {
+    return 'video';
+  }
+  if (text.startsWith('http') && (text.match(/\.(jpg|jpeg|png|gif|webp)/i))) {
+    return 'image';
+  }
+  if (text.startsWith('http')) {
+    return 'link';
+  }
+  return 'text';
+}
+
+async function saveContentItems(chatId, token) {
   const sectionName = adminState.tempData.sectionName;
-  const section = mainInterface.structure[sectionName];
+  const items = adminState.tempData.items || [];
   
-  if (!section || section.type !== 'section') {
-    await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    return;
-  }
-
-  if (!section.items) {
-    section.items = [];
-  }
-
-  const items = adminState.tempData.contentItems || [];
   if (items.length === 0) {
     await sendMessage(chatId, '⚠️ لم يتم إضافة أي محتوى!', token);
     return;
   }
 
-  section.items.push(...items);
+  if (!contentSystem.sections[sectionName]) {
+    await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+    return;
+  }
 
-  await sendMessage(chatId, `✅ تم إضافة ${items.length} محتوى إلى "${sectionName}"`, token);
+  if (!contentSystem.sections[sectionName].items) {
+    contentSystem.sections[sectionName].items = [];
+  }
+
+  contentSystem.sections[sectionName].items.push(...items);
+
+  await sendMessage(chatId, 
+    `✅ تم حفظ ${items.length} محتوى في "${sectionName}"`,
+    token
+  );
   
   adminState.currentAction = null;
   adminState.step = null;
   adminState.tempData = {};
-  await showSectionContentManagement(chatId, sectionName, token);
+  await showContentManagementMain(chatId, token);
 }
 
-// ========== عرض واجهة المستخدم ==========
+// ========== تعديل المحتوى ==========
+
+async function showEditContent(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `📂 ${section}`, callback_data: `edit_content_section_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '📂 اختر القسم لتعديل محتواه:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showEditContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لتعديله', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `✏️ ${item.title}`, callback_data: `edit_item_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `✏️ اختر المحتوى لتعديله في "${sectionName}":`, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function handleEditContentItem(chatId, text, token) {
+  const sectionName = adminState.tempData.sectionName;
+  const itemIndex = adminState.tempData.itemIndex;
+  const section = contentSystem.sections[sectionName];
+  
+  if (!section || !section.items || !section.items[itemIndex]) {
+    await sendMessage(chatId, '⚠️ المحتوى غير موجود!', token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    return;
+  }
+
+  if (adminState.step === 'waiting_edit_title') {
+    adminState.tempData.oldTitle = section.items[itemIndex].title;
+    adminState.tempData.oldContent = section.items[itemIndex].content;
+    section.items[itemIndex].title = text;
+    adminState.step = 'waiting_edit_content';
+    
+    await sendMessage(chatId, 
+      `✏️ أدخل المحتوى الجديد (كان: ${adminState.tempData.oldContent.substring(0, 50)}...)`,
+      token,
+      { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
+    );
+    return;
+  }
+
+  if (adminState.step === 'waiting_edit_content') {
+    section.items[itemIndex].content = text;
+    section.items[itemIndex].updated = new Date().toLocaleString('ar-EG');
+    
+    await sendMessage(chatId, `✅ تم تحديث المحتوى بنجاح!`, token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    adminState.tempData = {};
+    await showContentManagementMain(chatId, token);
+    return;
+  }
+}
+
+// ========== حذف المحتوى ==========
+
+async function showDeleteContent(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `📂 ${section}`, callback_data: `delete_content_section_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '📂 اختر القسم لحذف محتوى:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showDeleteContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لحذفه', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `🗑️ ${item.title}`, callback_data: `delete_item_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `🗑️ اختر المحتوى للحذف من "${sectionName}":`, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ========== ترتيب المحتوى ==========
+
+async function showReorderContent(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `📂 ${section}`, callback_data: `reorder_content_section_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '📂 اختر القسم لترتيب محتواه:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showReorderContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لترتيبه', token);
+    return;
+  }
+
+  let message = `📊 ترتيب محتوى "${sectionName}":\n\n`;
+  section.items.forEach((item, index) => {
+    message += `${index + 1}. ${item.title}\n`;
+  });
+
+  message += '\n🔹 اختر عنصراً لنقله:';
+
+  const buttons = section.items.map((item, index) => [
+    { text: `${index + 1}. ${item.title}`, callback_data: `content_reorder_select_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ========== نسخ محتوى ==========
+
+async function showCopyContent(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `📂 ${section}`, callback_data: `copy_content_section_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '📂 اختر القسم لنسخ محتوى:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showCopyContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لنسخه', token);
+    return;
+  }
+
+  const targetSections = Object.keys(contentSystem.sections).filter(s => s !== sectionName);
+  if (targetSections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام أخرى للنسخ إليها', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `📋 ${item.title}`, callback_data: `copy_item_select_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `📋 اختر المحتوى لنسخه من "${sectionName}":`, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ====================================================================
+// ========== واجهة المستخدم ==========
+// ====================================================================
 
 async function showUserMainMenu(chatId, token, userId) {
   if (mainInterface.order.length === 0) {
@@ -816,13 +934,9 @@ async function showUserMainMenu(chatId, token, userId) {
   });
 }
 
-// ========== معالجة اختيارات المستخدم ==========
-
 async function handleUserTextSelection(chatId, text, token, userId) {
-  // إزالة الإيموجي من النص
   const cleanText = text.replace(/[📁📂🔘]/g, '').trim();
 
-  // معالجة الرجوع
   if (text === '🔙 رجوع' || text === 'رجوع' || text === '🔙 القائمة الرئيسية') {
     if (userState[userId] && userState[userId].currentPath.length > 0) {
       userState[userId].currentPath.pop();
@@ -839,7 +953,6 @@ async function handleUserTextSelection(chatId, text, token, userId) {
     return;
   }
 
-  // البحث في العناصر
   for (const [name, element] of Object.entries(mainInterface.structure)) {
     if (name === cleanText) {
       if (element.type === 'folder') {
@@ -859,8 +972,6 @@ async function handleUserTextSelection(chatId, text, token, userId) {
 
   await sendMessage(chatId, 'استخدم الأزرار للتنقل', token);
 }
-
-// ========== عرض محتويات المجلد ==========
 
 async function showFolderContent(chatId, folderName, token, userId) {
   const folder = mainInterface.structure[folderName];
@@ -910,30 +1021,24 @@ async function showFolderContent(chatId, folderName, token, userId) {
   });
 }
 
-// ========== عرض محتوى القسم ==========
-
 async function showSectionContent(chatId, sectionName, token) {
-  const section = mainInterface.structure[sectionName];
-  if (!section || section.type !== 'section') {
+  const section = contentSystem.sections[sectionName];
+  if (!section) {
     await sendMessage(chatId, '⚠️ هذا القسم غير موجود', token);
     return;
   }
 
   const items = section.items || [];
-  const content = section.content || '';
-
-  if (content) {
-    await sendMessage(chatId, content, token, { parse_mode: 'HTML' });
-  }
 
   if (items.length === 0) {
     await sendMessage(chatId, '📂 هذا القسم فارغ حالياً', token);
     return;
   }
 
-  const buttons = items.map(item => [
-    { text: `📄 ${item.title}`, callback_data: `show_item_${sectionName}_${encodeURIComponent(item.title)}` }
-  ]);
+  const buttons = items.map(item => {
+    const icon = item.type === 'video' ? '🎬' : item.type === 'image' ? '🖼️' : '📄';
+    return [{ text: `${icon} ${item.title}`, callback_data: `show_item_${sectionName}_${encodeURIComponent(item.id)}` }];
+  });
   
   buttons.push([{ text: '🔙 رجوع', callback_data: 'back_to_menu' }]);
 
@@ -942,51 +1047,9 @@ async function showSectionContent(chatId, sectionName, token) {
   });
 }
 
-// ========== معالجة كولباك المستخدم ==========
-
-async function handleUserCallback(data, chatId, token, userId) {
-  if (data === 'back_to_menu') {
-    if (userState[userId]) {
-      userState[userId].currentPath = [];
-    }
-    await showUserMainMenu(chatId, token, userId);
-    return;
-  }
-
-  // عرض محتوى عنصر
-  if (data.startsWith('show_item_')) {
-    const parts = data.split('_');
-    const sectionName = parts[2];
-    const title = decodeURIComponent(parts.slice(3).join('_'));
-    
-    const section = mainInterface.structure[sectionName];
-    if (!section || section.type !== 'section') {
-      await sendMessage(chatId, '⚠️ القسم غير موجود', token);
-      return;
-    }
-
-    const items = section.items || [];
-    const item = items.find(i => i.title === title);
-    
-    if (item) {
-      await sendMessage(chatId, item.content || '⚠️ هذا المحتوى فارغ', token, {
-        parse_mode: 'HTML'
-      });
-    } else {
-      await sendMessage(chatId, '⚠️ المحتوى غير موجود', token);
-    }
-    return;
-  }
-
-  // فتح مجلد من كولباك
-  if (data.startsWith('open_folder_')) {
-    const folderName = data.replace('open_folder_', '');
-    await showFolderContent(chatId, folderName, token, userId);
-    return;
-  }
-}
-
-// ========== معالجة كولباك الأدمن ==========
+// ====================================================================
+// ========== معالجة الكولباك ==========
+// ====================================================================
 
 async function handleAdminCallback(data, chatId, messageId, token) {
   // ===== رجوع =====
@@ -1000,63 +1063,28 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== نقل قسم لمجلد =====
-  if (data.startsWith('move_section_')) {
-    const parts = data.split('_');
-    const sectionName = parts[2];
-    const folderName = parts[3];
-    
-    if (mainInterface.structure[folderName] && mainInterface.structure[folderName].type === 'folder') {
-      // إزالة من القائمة الرئيسية
-      const index = mainInterface.order.indexOf(sectionName);
-      if (index !== -1) {
-        mainInterface.order.splice(index, 1);
-      }
-      
-      // إضافة للمجلد
-      if (!mainInterface.structure[folderName].children.includes(sectionName)) {
-        mainInterface.structure[folderName].children.push(sectionName);
-      }
-      
-      await sendMessage(chatId, `✅ تم نقل "${sectionName}" إلى مجلد "${folderName}"`, token);
-      adminState.currentAction = null;
-      adminState.step = null;
-      adminState.tempData = {};
-      await showInterfaceManagement(chatId, token);
-    }
+  if (data === 'admin_content_back') {
+    await showContentManagementMain(chatId, token);
     return;
   }
 
-  if (data.startsWith('skip_move_')) {
-    const sectionName = data.split('_')[2];
-    await sendMessage(chatId, `✅ تم إنشاء القسم "${sectionName}" في القائمة الرئيسية`, token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    adminState.tempData = {};
-    await showInterfaceManagement(chatId, token);
+  // ===== إدارة الطلبات =====
+  if (data === 'show_pending') {
+    await showPendingRequests(chatId, token);
     return;
   }
 
-  if (data.startsWith('move_section_select_')) {
-    const sectionName = data.replace('move_section_select_', '');
-    adminState.tempData.sectionToMove = sectionName;
-    
-    const folders = Object.keys(mainInterface.structure).filter(
-      key => mainInterface.structure[key].type === 'folder'
-    );
-
-    const buttons = folders.map(folder => [
-      { text: `📁 ${folder}`, callback_data: `move_section_${sectionName}_${folder}` }
-    ]);
-    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_interface_back' }]);
-
-    await sendMessage(chatId, `📂 اختر المجلد لنقل "${sectionName}":`, token, {
-      reply_markup: { inline_keyboard: buttons }
-    });
+  if (data === 'show_rejected') {
+    await showRejectedRequests(chatId, token);
     return;
   }
 
-  // ===== تعديل عنصر =====
+  if (data === 'show_approved') {
+    await showApprovedUsers(chatId, token);
+    return;
+  }
+
+  // ===== إدارة الواجهة - تعديل =====
   if (data.startsWith('edit_element_')) {
     const name = data.replace('edit_element_', '');
     const element = mainInterface.structure[name];
@@ -1070,10 +1098,12 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       [{ text: '✏️ تغيير الاسم', callback_data: `edit_name_${name}` }]
     ];
 
-    if (element.type === 'section') {
-      buttons.push([{ text: '✏️ تعديل المحتوى', callback_data: `edit_section_content_${name}` }]);
-    } else if (element.type === 'button') {
+    if (element.type === 'button') {
       buttons.push([{ text: '✏️ تعديل المحتوى', callback_data: `edit_button_content_${name}` }]);
+    }
+
+    if (element.type === 'section') {
+      buttons.push([{ text: '📝 إدارة المحتوى', callback_data: `manage_content_${name}` }]);
     }
 
     buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_interface_back' }]);
@@ -1096,25 +1126,11 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  if (data.startsWith('edit_section_content_')) {
-    const name = data.replace('edit_section_content_', '');
-    adminState.currentAction = 'edit_content';
-    adminState.step = 'waiting_new_content';
-    adminState.tempData.name = name;
-    adminState.tempData.type = 'section';
-    
-    await sendMessage(chatId, `✏️ أدخل المحتوى الجديد للقسم "${name}":`, token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
-    return;
-  }
-
   if (data.startsWith('edit_button_content_')) {
     const name = data.replace('edit_button_content_', '');
-    adminState.currentAction = 'edit_content';
+    adminState.currentAction = 'edit_button';
     adminState.step = 'waiting_new_content';
-    adminState.tempData.name = name;
-    adminState.tempData.type = 'button';
+    adminState.tempData.buttonName = name;
     
     await sendMessage(chatId, `✏️ أدخل المحتوى الجديد للزر "${name}":`, token, {
       reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
@@ -1122,7 +1138,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== حذف عنصر =====
+  // ===== إدارة الواجهة - حذف =====
   if (data.startsWith('delete_element_')) {
     const name = data.replace('delete_element_', '');
     const element = mainInterface.structure[name];
@@ -1154,7 +1170,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     const index = mainInterface.order.indexOf(name);
     if (index !== -1) mainInterface.order.splice(index, 1);
 
-    // حذف من المجلدات
     for (const key of Object.keys(mainInterface.structure)) {
       if (mainInterface.structure[key].type === 'folder') {
         const children = mainInterface.structure[key].children;
@@ -1168,7 +1183,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
-  // ===== ترتيب العناصر =====
+  // ===== إدارة الواجهة - ترتيب =====
   if (data.startsWith('reorder_select_')) {
     const index = parseInt(data.replace('reorder_select_', ''));
     adminState.tempData.reorderIndex = index;
@@ -1204,28 +1219,66 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
+  // ===== إدارة الواجهة - نقل قسم لمجلد =====
+  if (data.startsWith('move_section_select_')) {
+    const sectionName = data.replace('move_section_select_', '');
+    adminState.tempData.sectionToMove = sectionName;
+    
+    const folders = Object.keys(mainInterface.structure).filter(
+      key => mainInterface.structure[key].type === 'folder'
+    );
+
+    const buttons = folders.map(folder => [
+      { text: `📁 ${folder}`, callback_data: `move_section_${sectionName}_${folder}` }
+    ]);
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_interface_back' }]);
+
+    await sendMessage(chatId, `📂 اختر المجلد لنقل "${sectionName}":`, token, {
+      reply_markup: { inline_keyboard: buttons }
+    });
+    return;
+  }
+
+  if (data.startsWith('move_section_')) {
+    const parts = data.split('_');
+    const sectionName = parts[2];
+    const folderName = parts[3];
+    
+    if (mainInterface.structure[folderName] && mainInterface.structure[folderName].type === 'folder') {
+      const index = mainInterface.order.indexOf(sectionName);
+      if (index !== -1) {
+        mainInterface.order.splice(index, 1);
+      }
+      
+      if (!mainInterface.structure[folderName].children.includes(sectionName)) {
+        mainInterface.structure[folderName].children.push(sectionName);
+      }
+      
+      await sendMessage(chatId, `✅ تم نقل "${sectionName}" إلى مجلد "${folderName}"`, token);
+      await showInterfaceManagement(chatId, token);
+    }
+    return;
+  }
+
   // ===== إدارة المحتوى =====
-  if (data.startsWith('manage_content_')) {
-    const sectionName = data.replace('manage_content_', '');
-    await showSectionContentManagement(chatId, sectionName, token);
+  if (data.startsWith('add_content_select_')) {
+    const sectionName = data.replace('add_content_select_', '');
+    adminState.currentAction = 'add_content';
+    adminState.step = 'waiting_content_title';
+    adminState.tempData.sectionName = sectionName;
+    adminState.tempData.items = [];
+    
+    await sendMessage(chatId, 
+      `📝 أدخل عنوان المحتوى الأول لـ "${sectionName}":`,
+      token,
+      { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
+    );
     return;
   }
 
-  if (data.startsWith('add_content_')) {
-    const sectionName = data.replace('add_content_', '');
-    await handleAddContent(chatId, sectionName, token);
-    return;
-  }
-
-  if (data.startsWith('edit_content_list_')) {
-    const sectionName = data.replace('edit_content_list_', '');
-    await showEditContentList(chatId, sectionName, token);
-    return;
-  }
-
-  if (data.startsWith('delete_content_list_')) {
-    const sectionName = data.replace('delete_content_list_', '');
-    await showDeleteContentList(chatId, sectionName, token);
+  if (data.startsWith('edit_content_section_')) {
+    const sectionName = data.replace('edit_content_section_', '');
+    await showEditContentItems(chatId, sectionName, token);
     return;
   }
 
@@ -1234,14 +1287,25 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     const sectionName = parts[2];
     const itemIndex = parseInt(parts[3]);
     
-    adminState.currentAction = 'edit_content_item';
-    adminState.step = 'waiting_new_title';
+    adminState.currentAction = 'edit_content';
+    adminState.step = 'waiting_edit_title';
     adminState.tempData.sectionName = sectionName;
     adminState.tempData.itemIndex = itemIndex;
     
-    await sendMessage(chatId, `✏️ أدخل العنوان الجديد:`, token, {
-      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
-    });
+    const section = contentSystem.sections[sectionName];
+    if (section && section.items && section.items[itemIndex]) {
+      await sendMessage(chatId, 
+        `✏️ أدخل العنوان الجديد (كان: ${section.items[itemIndex].title}):`,
+        token,
+        { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
+      );
+    }
+    return;
+  }
+
+  if (data.startsWith('delete_content_section_')) {
+    const sectionName = data.replace('delete_content_section_', '');
+    await showDeleteContentItems(chatId, sectionName, token);
     return;
   }
 
@@ -1250,12 +1314,128 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     const sectionName = parts[2];
     const itemIndex = parseInt(parts[3]);
     
-    const section = mainInterface.structure[sectionName];
+    const section = contentSystem.sections[sectionName];
     if (section && section.items) {
       section.items.splice(itemIndex, 1);
       await sendMessage(chatId, `✅ تم حذف المحتوى`, token);
-      await showSectionContentManagement(chatId, sectionName, token);
+      await showContentManagementMain(chatId, token);
     }
+    return;
+  }
+
+  if (data.startsWith('reorder_content_section_')) {
+    const sectionName = data.replace('reorder_content_section_', '');
+    await showReorderContentItems(chatId, sectionName, token);
+    return;
+  }
+
+  if (data.startsWith('content_reorder_select_')) {
+    const parts = data.split('_');
+    const sectionName = parts[3];
+    const fromIndex = parseInt(parts[4]);
+    
+    const section = contentSystem.sections[sectionName];
+    if (!section || !section.items) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود', token);
+      return;
+    }
+
+    const buttons = [];
+    for (let i = 0; i < section.items.length; i++) {
+      if (i !== fromIndex) {
+        buttons.push([
+          { text: `⬆️ نقل إلى ${i + 1}`, callback_data: `content_reorder_move_${sectionName}_${fromIndex}_${i}` }
+        ]);
+      }
+    }
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+    await sendMessage(chatId, 
+      `📊 اختر الموقع الجديد لـ "${section.items[fromIndex].title}":`,
+      token,
+      { reply_markup: { inline_keyboard: buttons } }
+    );
+    return;
+  }
+
+  if (data.startsWith('content_reorder_move_')) {
+    const parts = data.split('_');
+    const sectionName = parts[3];
+    const from = parseInt(parts[4]);
+    const to = parseInt(parts[5]);
+    
+    const section = contentSystem.sections[sectionName];
+    if (section && section.items) {
+      const item = section.items.splice(from, 1)[0];
+      section.items.splice(to, 0, item);
+      await sendMessage(chatId, `✅ تم تحديث ترتيب المحتوى`, token);
+      await showContentManagementMain(chatId, token);
+    }
+    return;
+  }
+
+  if (data.startsWith('copy_content_section_')) {
+    const sectionName = data.replace('copy_content_section_', '');
+    await showCopyContentItems(chatId, sectionName, token);
+    return;
+  }
+
+  if (data.startsWith('copy_item_select_')) {
+    const parts = data.split('_');
+    const sectionName = parts[3];
+    const itemIndex = parseInt(parts[4]);
+    
+    const section = contentSystem.sections[sectionName];
+    if (!section || !section.items || !section.items[itemIndex]) {
+      await sendMessage(chatId, '⚠️ المحتوى غير موجود', token);
+      return;
+    }
+
+    const item = section.items[itemIndex];
+    const targetSections = Object.keys(contentSystem.sections).filter(s => s !== sectionName);
+    
+    if (targetSections.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد أقسام أخرى', token);
+      return;
+    }
+
+    const buttons = targetSections.map(target => [
+      { text: `📂 ${target}`, callback_data: `copy_item_to_${sectionName}_${itemIndex}_${target}` }
+    ]);
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+    await sendMessage(chatId, `📋 اختر الوجهة لنسخ "${item.title}":`, token, {
+      reply_markup: { inline_keyboard: buttons }
+    });
+    return;
+  }
+
+  if (data.startsWith('copy_item_to_')) {
+    const parts = data.split('_');
+    const sectionName = parts[3];
+    const itemIndex = parseInt(parts[4]);
+    const targetSection = parts[5];
+    
+    const sourceSection = contentSystem.sections[sectionName];
+    const destSection = contentSystem.sections[targetSection];
+    
+    if (!sourceSection || !destSection || !sourceSection.items || !sourceSection.items[itemIndex]) {
+      await sendMessage(chatId, '⚠️ البيانات غير صالحة', token);
+      return;
+    }
+
+    const item = JSON.parse(JSON.stringify(sourceSection.items[itemIndex]));
+    item.id = Date.now() + Math.random();
+    item.copied_from = sectionName;
+    item.copied_at = new Date().toLocaleString('ar-EG');
+    
+    if (!destSection.items) {
+      destSection.items = [];
+    }
+    destSection.items.push(item);
+
+    await sendMessage(chatId, `✅ تم نسخ "${item.title}" إلى "${targetSection}"`, token);
+    await showContentManagementMain(chatId, token);
     return;
   }
 
@@ -1291,60 +1471,195 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     }
     return;
   }
+
+  if (data.startsWith('reapprove_')) {
+    const targetId = data.split('_')[1];
+    if (rejectedUsers[targetId]) {
+      approvedUsers[targetId] = rejectedUsers[targetId];
+      delete rejectedUsers[targetId];
+      delete pendingUsers[targetId];
+      
+      await sendMessage(targetId, '✅ تم استئناف طلبك! اضغط /start', token, {
+        reply_markup: { remove_keyboard: true }
+      });
+      await sendMessage(chatId, '✅ تم إعادة الموافقة', token);
+      await showRequestsManagement(chatId, token);
+    }
+    return;
+  }
+
+  if (data.startsWith('details_')) {
+    const targetId = data.split('_')[1];
+    let userInfo = pendingUsers[targetId] || rejectedUsers[targetId] || approvedUsers[targetId];
+    
+    if (userInfo) {
+      const status = pendingUsers[targetId] ? '⏳ معلق' : 
+                    rejectedUsers[targetId] ? '❌ مرفوض' : '✅ معتمد';
+      
+      const details = `
+📋 تفاصيل المستخدم:
+👤 الاسم: ${userInfo.name}
+🆔 اليوزرنيم: @${userInfo.username}
+📱 رقم الهاتف: ${userInfo.phone}
+🕐 تاريخ الطلب: ${userInfo.time}
+📌 الحالة: ${status}`;
+      
+      await sendMessage(chatId, details, token);
+    }
+    return;
+  }
+
+  if (data.startsWith('delete_user_')) {
+    const targetId = data.split('_')[2];
+    if (rejectedUsers[targetId]) {
+      delete rejectedUsers[targetId];
+      await sendMessage(chatId, '🗑️ تم حذف المستخدم', token);
+      await showRequestsManagement(chatId, token);
+    }
+    return;
+  }
 }
 
-// ========== تعديل وحذف المحتوى ==========
+// ====================================================================
+// ========== عرض القوائم ==========
+// ====================================================================
 
-async function showEditContentList(chatId, sectionName, token) {
-  const section = mainInterface.structure[sectionName];
-  if (!section || section.type !== 'section') {
-    await sendMessage(chatId, '⚠️ القسم غير موجود', token);
+async function showPendingRequests(chatId, token) {
+  const pendingList = Object.values(pendingUsers);
+  if (pendingList.length === 0) {
+    await sendMessage(chatId, '📋 لا توجد طلبات معلقة', token, {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 رجوع', callback_data: 'admin_back' }]] }
+    });
     return;
   }
 
-  const items = section.items || [];
-  if (items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لتعديله', token);
-    return;
+  let message = '📋 الطلبات المعلقة:\n\n';
+  const buttons = [];
+  
+  for (const user of pendingList) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
+    buttons.push([
+      { text: `✅ قبول`, callback_data: `approve_${user.id}` },
+      { text: `❌ رفض`, callback_data: `reject_${user.id}` }
+    ]);
+    buttons.push([
+      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
+    ]);
   }
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_back' }]);
 
-  const buttons = items.map((item, index) => [
-    { text: `✏️ ${item.title}`, callback_data: `edit_item_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: `manage_content_${sectionName}` }]);
-
-  await sendMessage(chatId, `✏️ اختر المحتوى لتعديله:`, token, {
+  await sendMessage(chatId, message, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
 
-async function showDeleteContentList(chatId, sectionName, token) {
-  const section = mainInterface.structure[sectionName];
-  if (!section || section.type !== 'section') {
-    await sendMessage(chatId, '⚠️ القسم غير موجود', token);
+async function showRejectedRequests(chatId, token) {
+  const rejectedList = Object.values(rejectedUsers);
+  if (rejectedList.length === 0) {
+    await sendMessage(chatId, '❌ لا يوجد مرفوضين', token, {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 رجوع', callback_data: 'admin_back' }]] }
+    });
     return;
   }
 
-  const items = section.items || [];
-  if (items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لحذفه', token);
-    return;
+  let message = '❌ المرفوضين:\n\n';
+  const buttons = [];
+  
+  for (const user of rejectedList) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
+    buttons.push([
+      { text: `✅ إعادة موافقة`, callback_data: `reapprove_${user.id}` },
+      { text: `🗑️ حذف`, callback_data: `delete_user_${user.id}` }
+    ]);
+    buttons.push([
+      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
+    ]);
   }
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_back' }]);
 
-  const buttons = items.map((item, index) => [
-    { text: `🗑️ ${item.title}`, callback_data: `delete_item_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: `manage_content_${sectionName}` }]);
-
-  await sendMessage(chatId, `🗑️ اختر المحتوى للحذف:`, token, {
+  await sendMessage(chatId, message, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
 
-// ========== دوال إضافية ==========
+async function showApprovedUsers(chatId, token) {
+  const approvedList = Object.values(approvedUsers);
+  if (approvedList.length === 0) {
+    await sendMessage(chatId, '✅ لا يوجد معتمدين', token, {
+      reply_markup: { inline_keyboard: [[{ text: '🔙 رجوع', callback_data: 'admin_back' }]] }
+    });
+    return;
+  }
+
+  let message = '✅ المعتمدين:\n\n';
+  const buttons = [];
+  
+  for (const user of approvedList.slice(0, 10)) {
+    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
+    buttons.push([
+      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
+    ]);
+  }
+  
+  if (approvedList.length > 10) {
+    message += `\n⚠️ يوجد ${approvedList.length - 10} معتمدين آخرين...`;
+  }
+  
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_back' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ====================================================================
+// ========== معالجة كولباك المستخدم ==========
+// ====================================================================
+
+async function handleUserCallback(data, chatId, token, userId) {
+  if (data === 'back_to_menu') {
+    if (userState[userId]) {
+      userState[userId].currentPath = [];
+    }
+    await showUserMainMenu(chatId, token, userId);
+    return;
+  }
+
+  if (data.startsWith('show_item_')) {
+    const parts = data.split('_');
+    const sectionName = parts[2];
+    const itemId = decodeURIComponent(parts.slice(3).join('_'));
+    
+    const section = contentSystem.sections[sectionName];
+    if (!section) {
+      await sendMessage(chatId, '⚠️ القسم غير موجود', token);
+      return;
+    }
+
+    const item = section.items.find(i => i.id == itemId);
+    if (item) {
+      let content = item.content;
+      if (item.type === 'video') {
+        content = `🎬 ${item.title}\n\n${content}`;
+      } else if (item.type === 'image') {
+        content = `🖼️ ${item.title}\n\n${content}`;
+      }
+      await sendMessage(chatId, content || '⚠️ هذا المحتوى فارغ', token, {
+        parse_mode: 'HTML'
+      });
+    } else {
+      await sendMessage(chatId, '⚠️ المحتوى غير موجود', token);
+    }
+    return;
+  }
+}
+
+// ====================================================================
+// ========== دوال مساعدة إضافية ==========
+// ====================================================================
 
 async function showStatistics(chatId, token) {
-  const stats = `📊 الإحصائيات:
+  const stats = `📊 الإحصائيات العامة:
 
 👥 المستخدمين:
 • ✅ معتمدين: ${Object.keys(approvedUsers).length}
@@ -1357,14 +1672,16 @@ async function showStatistics(chatId, token) {
 • 🔘 أزرار: ${Object.values(mainInterface.structure).filter(c => c.type === 'button').length}
 • 📌 مجموع: ${Object.keys(mainInterface.structure).length}
 
+📝 المحتوى:
+• 📂 أقسام محتوى: ${Object.keys(contentSystem.sections).length}
+• 📄 عناصر: ${Object.values(contentSystem.sections).reduce((sum, s) => sum + (s.items?.length || 0), 0)}
+
 ⏱️ آخر تحديث: ${new Date().toLocaleString('ar-EG')}`;
 
   await sendMessage(chatId, stats, token, {
     reply_markup: { keyboard: [['🔙 العودة']], resize_keyboard: true }
   });
 }
-
-// ========== دوال مساعدة ==========
 
 async function sendMessage(chatId, text, token, options = {}) {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
