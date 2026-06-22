@@ -1,10 +1,7 @@
-name = "telegram-story-bot"
-main = "worker.js"
+name = "telegram-bot"
+main = "src/index.js"
 compatibility_date = "2024-01-01"
 
-kv_namespaces = [
-  { binding = "BOT_KV", id = "7ca07328d8b942ffb398e4c04ad997bf" }
-]
-
 [vars]
-BOT_TOKEN = ""
+BOT_TOKEN = "ضع_توكن_البوت_هنا"
+ADMIN_ID = "ضع_معرف_الأدمن_هنا"
