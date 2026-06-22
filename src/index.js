@@ -142,7 +142,8 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
-    await handleUserSelection(chatId, text, token);
+    // ===== معالجة اختيار المستخدم (نص عادي) =====
+    await handleUserTextSelection(chatId, text, token);
     return;
   }
 
@@ -159,6 +160,7 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
+    // ===== معالجة اختيار المستخدم (كولباك) =====
     await handleUserCallback(data, chatId, token);
     await answerCallbackQuery(query.id, '✅ تم', token);
     return;
@@ -381,12 +383,13 @@ async function showUserMainMenu(chatId, token) {
     return;
   }
 
+  // ===== استخدام أزرار نصية (بدلاً من كولباك) =====
   const buttons = [];
   for (const name of categories.order) {
     const category = categories.structure[name];
     if (!category) continue;
     const icon = category.type === 'folder' ? '📁' : '📄';
-    buttons.push([{ text: `${icon} ${name}`, callback_data: `open_${name}` }]);
+    buttons.push([`${icon} ${name}`]);
   }
 
   await sendMessage(chatId, '🎉 مرحباً! اختر القسم:', token, {
@@ -397,19 +400,76 @@ async function showUserMainMenu(chatId, token) {
   });
 }
 
-async function handleUserSelection(chatId, text, token) {
-  // البحث عن قسم مباشر
+// ===== معالجة اختيار المستخدم من النص (الأزرار النصية) =====
+async function handleUserTextSelection(chatId, text, token) {
+  // إزالة الإيموجي من النص للمقارنة
+  const cleanText = text.replace(/[📁📄]/g, '').trim();
+  
+  // البحث في الأقسام
   for (const [name, data] of Object.entries(categories.structure)) {
-    if (data.type === 'direct' && name === text) {
-      await sendMessage(chatId, data.content || '⚠️ فارغ', token, { parse_mode: 'HTML' });
-      return;
+    if (name === cleanText) {
+      if (data.type === 'direct') {
+        // عرض محتوى القسم المباشر
+        await sendMessage(chatId, data.content || '⚠️ هذا القسم فارغ', token, { 
+          parse_mode: 'HTML' 
+        });
+        return;
+      } else if (data.type === 'folder') {
+        // عرض محتويات المجلد
+        const children = data.children || [];
+        if (children.length === 0) {
+          await sendMessage(chatId, `📁 "${name}" فارغ`, token);
+          return;
+        }
+        
+        const buttons = children.map(child => {
+          const childData = categories.structure[child];
+          if (!childData) return null;
+          const icon = childData.type === 'folder' ? '📁' : '📄';
+          return [`${icon} ${child}`];
+        }).filter(Boolean);
+        
+        buttons.push(['🔙 رجوع']);
+        
+        await sendMessage(chatId, `📁 محتويات "${name}":`, token, {
+          reply_markup: {
+            keyboard: buttons,
+            resize_keyboard: true
+          }
+        });
+        return;
+      }
     }
   }
 
-  await sendMessage(chatId, 'استخدم الأزرار للتنقل', token);
+  // معالجة أزرار المساعدة
+  if (text === 'ℹ️ عن البوت') {
+    await sendMessage(chatId, '📌 بوت القصص والمقاطع\nالإصدار 2.0\nللتواصل: @jahab', token);
+    return;
+  }
+  
+  if (text === '🆘 مساعدة') {
+    await sendMessage(chatId, '🆘 للمساعدة:\n• استخدم الأزرار للتنقل\n• اختر القسم المناسب\n• للتواصل: @jahab', token);
+    return;
+  }
+
+  if (text === '🔙 رجوع') {
+    await showUserMainMenu(chatId, token);
+    return;
+  }
+
+  // إذا لم يتم العثور على تطابق
+  await sendMessage(chatId, 'استخدم الأزرار للتنقل في البوت', token);
 }
 
+// ===== معالجة اختيار المستخدم من الكولباك =====
 async function handleUserCallback(data, chatId, token) {
+  if (data === 'back_to_menu') {
+    await showUserMainMenu(chatId, token);
+    return;
+  }
+
+  // معالجة فتح قسم من الكولباك
   if (data.startsWith('open_')) {
     const name = data.replace('open_', '');
     const category = categories.structure[name];
@@ -420,7 +480,9 @@ async function handleUserCallback(data, chatId, token) {
     }
 
     if (category.type === 'direct') {
-      await sendMessage(chatId, category.content || '⚠️ فارغ', token, { parse_mode: 'HTML' });
+      await sendMessage(chatId, category.content || '⚠️ هذا القسم فارغ', token, { 
+        parse_mode: 'HTML' 
+      });
     } else if (category.type === 'folder') {
       const children = category.children || [];
       if (children.length === 0) {
@@ -441,8 +503,6 @@ async function handleUserCallback(data, chatId, token) {
         reply_markup: { inline_keyboard: buttons }
       });
     }
-  } else if (data === 'back_to_menu') {
-    await showUserMainMenu(chatId, token);
   }
 }
 
