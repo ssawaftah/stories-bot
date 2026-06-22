@@ -74,6 +74,12 @@ async function handleTelegramUpdate(update, env) {
 
     // ========== واجهة الأدمن ==========
     if (userId.toString() === ADMIN_ID) {
+      // معالجة الفيديو والصورة من الأدمن
+      if (msg.video || msg.animation || msg.document || msg.photo) {
+        await handleAdminMedia(chatId, msg, token);
+        return;
+      }
+
       if (text === '/start' || text === '/admin') {
         await showAdminMainMenu(chatId, token);
         return;
@@ -174,6 +180,65 @@ async function handleTelegramUpdate(update, env) {
   }
 }
 
+// ========== معالجة وسائط الأدمن ==========
+
+async function handleAdminMedia(chatId, msg, token) {
+  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content_body') {
+    let mediaUrl = '';
+    let mediaType = 'text';
+    let caption = msg.caption || '';
+
+    if (msg.video) {
+      mediaUrl = msg.video.file_id;
+      mediaType = 'video';
+    } else if (msg.animation) {
+      mediaUrl = msg.animation.file_id;
+      mediaType = 'animation';
+    } else if (msg.document) {
+      mediaUrl = msg.document.file_id;
+      mediaType = 'document';
+    } else if (msg.photo) {
+      const photo = msg.photo[msg.photo.length - 1];
+      mediaUrl = photo.file_id;
+      mediaType = 'image';
+    }
+
+    const contentText = caption || mediaUrl;
+
+    if (!adminState.tempData.items) {
+      adminState.tempData.items = [];
+    }
+
+    adminState.tempData.items.push({
+      id: Date.now() + Math.random(),
+      title: adminState.tempData.currentTitle || 'بدون عنوان',
+      content: contentText,
+      type: mediaType,
+      fileId: mediaUrl,
+      created: new Date().toLocaleString('ar-EG')
+    });
+
+    await sendMessage(chatId, 
+      `✅ تم إضافة "${adminState.tempData.currentTitle}"\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [
+            ['✅ حفظ الكل'],
+            ['🔙 إلغاء']
+          ], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    
+    adminState.step = 'waiting_content_title';
+    return;
+  }
+
+  await sendMessage(chatId, '⚠️ لا يمكنك إرسال وسائط الآن. استخدم الأزرار.', token);
+}
+
 // ====================================================================
 // ========== قائمة الأدمن الرئيسية ==========
 // ====================================================================
@@ -209,8 +274,6 @@ async function showAdminMainMenu(chatId, token) {
 }
 
 async function handleAdminActions(chatId, text, token) {
-  console.log('Admin action:', text); // للتتبع
-
   switch(text) {
     case '📋 إدارة الطلبات':
       await showRequestsManagement(chatId, token);
@@ -256,9 +319,6 @@ async function handleAdminActions(chatId, text, token) {
 // ====================================================================
 
 async function handleAdminSubActions(chatId, text, token) {
-  console.log('Admin sub action:', text);
-  console.log('Admin state:', adminState);
-
   // ===== إنشاء مجلد =====
   if (text === '📁 إنشاء مجلد') {
     adminState.currentAction = 'create_folder';
@@ -450,7 +510,7 @@ async function handleAdminSubActions(chatId, text, token) {
     return;
   }
 
-  // ===== معالجة حفظ محتوى =====
+  // ===== معالجة حفظ محتوى نصي =====
   if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content_body') {
     await handleAddContentItems(chatId, text, token);
     return;
@@ -481,6 +541,12 @@ async function handleAdminSubActions(chatId, text, token) {
 
   if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_edit_content') {
     await handleEditContentItem(chatId, text, token);
+    return;
+  }
+
+  // ===== تعديل اسم قسم المحتوى =====
+  if (adminState.currentAction === 'edit_content_section_name' && adminState.step === 'waiting_new_name') {
+    await handleEditContentSectionName(chatId, text, token);
     return;
   }
 
@@ -890,6 +956,42 @@ async function showEditContentSection(chatId, token) {
   });
 }
 
+async function handleEditContentSectionName(chatId, text, token) {
+  const oldName = adminState.tempData.oldName;
+  
+  if (!contentSystem.sections[oldName]) {
+    await sendMessage(chatId, '⚠️ القسم غير موجود!', token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    return;
+  }
+
+  if (contentSystem.sections[text] && text !== oldName) {
+    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
+    return;
+  }
+
+  contentSystem.sections[text] = contentSystem.sections[oldName];
+  contentSystem.sections[text].title = text;
+  delete contentSystem.sections[oldName];
+
+  // تحديث في الواجهة إذا كان موجوداً
+  if (mainInterface.structure[oldName] && mainInterface.structure[oldName].type === 'section') {
+    mainInterface.structure[text] = mainInterface.structure[oldName];
+    mainInterface.structure[text].contentId = text;
+    delete mainInterface.structure[oldName];
+    
+    const index = mainInterface.order.indexOf(oldName);
+    if (index !== -1) mainInterface.order[index] = text;
+  }
+
+  await sendMessage(chatId, `✅ تم تعديل اسم قسم المحتوى إلى "${text}"`, token);
+  adminState.currentAction = null;
+  adminState.step = null;
+  adminState.tempData = {};
+  await showContentManagementMain(chatId, token);
+}
+
 async function showDeleteContentSection(chatId, token) {
   const sections = Object.keys(contentSystem.sections);
   if (sections.length === 0) {
@@ -944,16 +1046,29 @@ async function handleAddContentItems(chatId, text, token) {
     adminState.tempData.items = [];
   }
   
+  let contentType = 'text';
+  let contentText = text;
+  
+  if (text && text.startsWith('http')) {
+    if (text.includes('youtube') || text.includes('youtu.be') || text.includes('vimeo')) {
+      contentType = 'video';
+    } else if (text.match(/\.(jpg|jpeg|png|gif|webp|bmp|svg)/i)) {
+      contentType = 'image';
+    } else {
+      contentType = 'link';
+    }
+  }
+  
   adminState.tempData.items.push({
     id: Date.now() + Math.random(),
     title: adminState.tempData.currentTitle || 'بدون عنوان',
-    content: text,
-    type: detectContentType(text),
+    content: contentText,
+    type: contentType,
     created: new Date().toLocaleString('ar-EG')
   });
 
   await sendMessage(chatId, 
-    `✅ تم إضافة "${adminState.tempData.currentTitle}"\n\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
+    `✅ تم إضافة "${adminState.tempData.currentTitle}"\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
     token,
     { 
       reply_markup: { 
@@ -967,19 +1082,6 @@ async function handleAddContentItems(chatId, text, token) {
   );
   
   adminState.step = 'waiting_content_title';
-}
-
-function detectContentType(text) {
-  if (text.startsWith('http') && (text.includes('youtube') || text.includes('youtu.be'))) {
-    return 'video';
-  }
-  if (text.startsWith('http') && (text.match(/\.(jpg|jpeg|png|gif|webp)/i))) {
-    return 'image';
-  }
-  if (text.startsWith('http')) {
-    return 'link';
-  }
-  return 'text';
 }
 
 async function saveContentItems(chatId, token) {
@@ -1003,13 +1105,14 @@ async function saveContentItems(chatId, token) {
   contentSystem.sections[sectionName].items.push(...items);
 
   await sendMessage(chatId, 
-    `✅ تم حفظ ${items.length} محتوى في "${sectionName}"`,
+    `✅ تم حفظ ${items.length} محتوى في "${sectionName}"\n\n📌 يمكنك رؤيتها في واجهة المستخدم`,
     token
   );
   
   adminState.currentAction = null;
   adminState.step = null;
   adminState.tempData = {};
+  
   await showContentManagementMain(chatId, token);
 }
 
@@ -1260,8 +1363,6 @@ async function showSectionContent(chatId, sectionName, token) {
 // ====================================================================
 
 async function handleAdminCallback(data, chatId, messageId, token) {
-  console.log('Admin callback:', data);
-
   // ===== رجوع =====
   if (data === 'admin_back') {
     await showAdminMainMenu(chatId, token);
@@ -1507,11 +1608,20 @@ async function handleAdminCallback(data, chatId, messageId, token) {
   if (data.startsWith('delete_content_section_confirm_')) {
     const sectionName = data.replace('delete_content_section_confirm_', '');
     
+    // حذف من نظام المحتوى
     if (contentSystem.sections[sectionName]) {
       delete contentSystem.sections[sectionName];
-      await sendMessage(chatId, `✅ تم حذف قسم المحتوى "${sectionName}"`, token);
-      await showContentManagementMain(chatId, token);
     }
+    
+    // حذف من الواجهة إذا كان موجوداً
+    if (mainInterface.structure[sectionName] && mainInterface.structure[sectionName].type === 'section') {
+      delete mainInterface.structure[sectionName];
+      const index = mainInterface.order.indexOf(sectionName);
+      if (index !== -1) mainInterface.order.splice(index, 1);
+    }
+    
+    await sendMessage(chatId, `✅ تم حذف قسم المحتوى "${sectionName}"`, token);
+    await showContentManagementMain(chatId, token);
     return;
   }
 
@@ -1959,6 +2069,8 @@ async function handleUserCallback(data, chatId, token, userId) {
         content = `🎬 ${item.title}\n\n${content}`;
       } else if (item.type === 'image') {
         content = `🖼️ ${item.title}\n\n${content}`;
+      } else if (item.type === 'animation') {
+        content = `🎞️ ${item.title}\n\n${content}`;
       }
       await sendMessage(chatId, content || '⚠️ هذا المحتوى فارغ', token, {
         parse_mode: 'HTML'
