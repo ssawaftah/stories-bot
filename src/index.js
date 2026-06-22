@@ -105,7 +105,6 @@ async function handleTelegramUpdate(update, env) {
 
     if (text === '/start') {
       if (approvedUsers[userId]) {
-        // التحقق من الاشتراك الإجباري
         const subscribed = await checkMandatorySubscription(userId, token);
         if (!subscribed) {
           await sendSubscriptionMessage(chatId, token);
@@ -171,14 +170,12 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
-    // التحقق من الاشتراك الإجباري
     const subscribed = await checkMandatorySubscription(userId, token);
     if (!subscribed) {
       await sendSubscriptionMessage(chatId, token);
       return;
     }
 
-    // معالجة بحث المستخدم عن محتوى
     await handleUserSearch(chatId, text, token, userId);
     return;
   }
@@ -210,7 +207,6 @@ async function checkMandatorySubscription(userId, token) {
   if (!mandatorySubscription.enabled) return true;
   
   try {
-    // التحقق من القنوات
     for (const channel of mandatorySubscription.channels) {
       const chatMember = await getChatMember(channel, userId, token);
       if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
@@ -218,7 +214,6 @@ async function checkMandatorySubscription(userId, token) {
       }
     }
     
-    // التحقق من المجموعات
     for (const group of mandatorySubscription.groups) {
       const chatMember = await getChatMember(group, userId, token);
       if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
@@ -229,7 +224,7 @@ async function checkMandatorySubscription(userId, token) {
     return true;
   } catch (error) {
     console.error('Error checking subscription:', error);
-    return true; // إذا حدث خطأ، نسمح بالدخول
+    return true;
   }
 }
 
@@ -365,6 +360,7 @@ async function handleAdminSubActions(chatId, text, token) {
     adminState.currentAction = 'add_content';
     adminState.step = 'waiting_title';
     adminState.tempData.type = typeMap[text];
+    adminState.tempData.mediaItems = []; // تخزين الوسائط المتعددة
     
     await sendMessage(chatId, 
       `أدخل عنوان المحتوى (نوع: ${text}):`,
@@ -386,17 +382,17 @@ async function handleAdminSubActions(chatId, text, token) {
     
     const type = adminState.tempData.type;
     let instruction = '';
-    if (type === 'image') instruction = 'أرسل الصورة:';
+    if (type === 'image') instruction = 'أرسل الصور (يمكنك إرسال عدة صور):';
     else if (type === 'video') instruction = 'أرسل الفيديو:';
-    else if (type === 'text') instruction = 'أرسل النص:';
+    else if (type === 'text') instruction = 'أرسل النص (يمكنك إرسال عدة نصوص):';
     
     await sendMessage(chatId, 
-      `${instruction}\n\n(يمكنك إرسال عدة محتويات، اضغط "حفظ الكل" عند الانتهاء)`,
+      `${instruction}\n\n(اضغط "حفظ" عند الانتهاء)`,
       token,
       { 
         reply_markup: { 
           keyboard: [
-            ['✅ حفظ الكل'],
+            ['✅ حفظ المحتوى'],
             ['🔙 إلغاء']
           ], 
           resize_keyboard: true 
@@ -406,9 +402,9 @@ async function handleAdminSubActions(chatId, text, token) {
     return;
   }
 
-  // ===== حفظ الكل =====
-  if (text === '✅ حفظ الكل' && adminState.currentAction === 'add_content') {
-    await saveContentItems(chatId, token);
+  // ===== حفظ المحتوى =====
+  if (text === '✅ حفظ المحتوى' && adminState.currentAction === 'add_content') {
+    await saveSingleContent(chatId, token);
     return;
   }
 
@@ -421,29 +417,21 @@ async function handleAdminSubActions(chatId, text, token) {
     return;
   }
 
-  // ===== معالجة النص =====
+  // ===== معالجة النص (تجميع النصوص في محتوى واحد) =====
   if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content') {
     if (adminState.tempData.type === 'text') {
-      if (!adminState.tempData.items) {
-        adminState.tempData.items = [];
+      if (!adminState.tempData.texts) {
+        adminState.tempData.texts = [];
       }
+      adminState.tempData.texts.push(text);
       
-      const contentId = generateContentId();
-      adminState.tempData.items.push({
-        id: contentId,
-        type: 'text',
-        title: adminState.tempData.title || 'بدون عنوان',
-        content: text,
-        date: new Date().toLocaleString('ar-EG')
-      });
-
       await sendMessage(chatId, 
-        `✅ تم إضافة المحتوى (رقم: ${contentId})\nأرسل النص التالي أو اضغط "حفظ الكل":`,
+        `✅ تم إضافة النص\nأرسل النص التالي أو اضغط "حفظ المحتوى":`,
         token,
         { 
           reply_markup: { 
             keyboard: [
-              ['✅ حفظ الكل'],
+              ['✅ حفظ المحتوى'],
               ['🔙 إلغاء']
             ], 
             resize_keyboard: true 
@@ -594,8 +582,12 @@ async function handleAdminSubActions(chatId, text, token) {
     const item = contentSystem.items[contentId];
     
     if (item) {
+      if (item.type === 'text') {
+        item.content = text;
+      } else {
+        item.content = text;
+      }
       item.title = adminState.tempData.newTitle;
-      item.content = text;
       item.date = new Date().toLocaleString('ar-EG');
       
       await sendMessage(chatId, `✅ تم تعديل المحتوى رقم ${contentId}`, token);
@@ -634,27 +626,24 @@ async function handleAdminMedia(chatId, msg, token) {
       type = 'image';
     }
 
-    if (!adminState.tempData.items) {
-      adminState.tempData.items = [];
+    if (!adminState.tempData.mediaItems) {
+      adminState.tempData.mediaItems = [];
     }
 
-    const contentId = generateContentId();
-    adminState.tempData.items.push({
-      id: contentId,
-      type: type,
-      title: adminState.tempData.title || 'بدون عنوان',
-      content: caption || fileId,
+    adminState.tempData.mediaItems.push({
       fileId: fileId,
-      date: new Date().toLocaleString('ar-EG')
+      type: type,
+      caption: caption
     });
 
+    const typeLabel = type === 'image' ? 'صورة' : type === 'video' ? 'فيديو' : 'ملف';
     await sendMessage(chatId, 
-      `✅ تم إضافة المحتوى (رقم: ${contentId})\nأرسل التالي أو اضغط "حفظ الكل":`,
+      `✅ تم إضافة ${typeLabel}\nأرسل المزيد أو اضغط "حفظ المحتوى":`,
       token,
       { 
         reply_markup: { 
           keyboard: [
-            ['✅ حفظ الكل'],
+            ['✅ حفظ المحتوى'],
             ['🔙 إلغاء']
           ], 
           resize_keyboard: true 
@@ -667,37 +656,58 @@ async function handleAdminMedia(chatId, msg, token) {
   await sendMessage(chatId, '⚠️ لا يمكنك إرسال وسائط الآن.', token);
 }
 
-// ========== حفظ المحتوى ==========
+// ========== حفظ محتوى واحد (متعدد الوسائط) ==========
 
-async function saveContentItems(chatId, token) {
-  const items = adminState.tempData.items || [];
+async function saveSingleContent(chatId, token) {
+  const title = adminState.tempData.title;
+  const type = adminState.tempData.type;
+  const mediaItems = adminState.tempData.mediaItems || [];
+  const texts = adminState.tempData.texts || [];
   
-  if (items.length === 0) {
-    await sendMessage(chatId, '⚠️ لم يتم إضافة أي محتوى!', token);
+  if (type === 'text' && texts.length === 0) {
+    await sendMessage(chatId, '⚠️ لم يتم إضافة أي نص!', token);
+    return;
+  }
+  
+  if ((type === 'image' || type === 'video') && mediaItems.length === 0) {
+    await sendMessage(chatId, '⚠️ لم يتم إضافة أي وسائط!', token);
     return;
   }
 
-  let savedCount = 0;
+  const contentId = generateContentId();
+  let contentText = '';
+  let fileId = null;
 
-  for (const item of items) {
-    const contentId = item.id;
-    contentSystem.items[contentId] = {
-      id: contentId,
-      type: item.type,
-      title: item.title,
-      content: item.content,
-      fileId: item.fileId || null,
-      date: item.date
-    };
-    savedCount++;
+  if (type === 'text') {
+    contentText = texts.join('\n\n─────────────────\n\n');
+  } else if (mediaItems.length === 1) {
+    // وسيط واحد
+    fileId = mediaItems[0].fileId;
+    contentText = mediaItems[0].caption || '';
+  } else {
+    // عدة وسائط - نخزنها كقائمة
+    const mediaList = mediaItems.map((item, index) => {
+      return `[${index + 1}] ${item.caption || 'بدون وصف'}`;
+    }).join('\n');
+    fileId = mediaItems[0].fileId; // نحتفظ بأول fileId للعرض
+    contentText = `📎 عدد الوسائط: ${mediaItems.length}\n\n${mediaList}`;
   }
 
-  // إرسال رابط المشاركة العام
+  contentSystem.items[contentId] = {
+    id: contentId,
+    type: type,
+    title: title,
+    content: contentText,
+    fileId: fileId,
+    mediaItems: mediaItems.length > 1 ? mediaItems : null, // حفظ جميع الوسائط
+    date: new Date().toLocaleString('ar-EG')
+  };
+
   const botUsername = (await getBotInfo(token)).username;
-  const shareLink = `https://t.me/${botUsername}?start=share_${items[0].id}`;
+  const shareLink = `https://t.me/${botUsername}?start=share_${contentId}`;
 
   await sendMessage(chatId, 
-    `✅ تم حفظ ${savedCount} محتوى بنجاح!\n\nالأرقام:\n${items.map(i => `• ${i.id}`).join('\n')}\n\nرابط المشاركة العام:\n${shareLink}`,
+    `✅ تم حفظ المحتوى بنجاح!\n\nالعنوان: ${title}\nالنوع: ${type}\nالرقم: ${contentId}\nعدد العناصر: ${type === 'text' ? texts.length : mediaItems.length}\n\nرابط المشاركة:\n${shareLink}`,
     token
   );
   
@@ -705,6 +715,59 @@ async function saveContentItems(chatId, token) {
   adminState.step = null;
   adminState.tempData = {};
   await showAdminMainMenu(chatId, token);
+}
+
+// ========== إرسال المحتوى للمستخدم ==========
+
+async function sendContent(chatId, item, token) {
+  const caption = `${item.title}\n\nرقم: ${item.id}\n${item.date}`;
+
+  // إذا كان هناك وسائط متعددة
+  if (item.mediaItems && item.mediaItems.length > 1) {
+    // إرسال أول وسيط مع قائمة
+    const firstMedia = item.mediaItems[0];
+    if (firstMedia.type === 'image') {
+      await sendPhoto(chatId, firstMedia.fileId, `${item.title}\n\nرقم: ${item.id}\n${item.date}\n\n📎 ${item.mediaItems.length} وسائط`, token);
+    } else if (firstMedia.type === 'video') {
+      await sendVideo(chatId, firstMedia.fileId, `${item.title}\n\nرقم: ${item.id}\n${item.date}\n\n📎 ${item.mediaItems.length} وسائط`, token);
+    }
+    
+    // إرسال باقي الوسائط كمجموعة
+    for (let i = 1; i < item.mediaItems.length; i++) {
+      const media = item.mediaItems[i];
+      if (media.type === 'image') {
+        await sendPhoto(chatId, media.fileId, `[${i+1}] ${media.caption || ''}`, token);
+      } else if (media.type === 'video') {
+        await sendVideo(chatId, media.fileId, `[${i+1}] ${media.caption || ''}`, token);
+      }
+    }
+    
+    await sendMessage(chatId, `📎 إجمالي ${item.mediaItems.length} وسائط`, token);
+  } 
+  // وسيط واحد
+  else if (item.fileId && (item.type === 'video' || item.type === 'animation')) {
+    await sendVideo(chatId, item.fileId, caption, token);
+  } else if (item.fileId && item.type === 'image') {
+    await sendPhoto(chatId, item.fileId, caption, token);
+  } else if (item.fileId && item.type === 'document') {
+    await sendDocument(chatId, item.fileId, caption, token);
+  } else {
+    // نص عادي
+    await sendMessage(chatId, 
+      `${item.title}\n\n${item.content}\n\nرقم: ${item.id}\n${item.date}`,
+      token
+    );
+  }
+
+  await sendMessage(chatId, '🔍 للبحث عن محتوى آخر استخدم الزر:', token, {
+    reply_markup: {
+      keyboard: [
+        ['🔍 البحث عن محتوى'],
+        ['🔙 رجوع']
+      ],
+      resize_keyboard: true
+    }
+  });
 }
 
 // ====================================================================
@@ -850,7 +913,8 @@ async function showAllContent(chatId, token) {
   let message = '📦 قائمة المحتويات:\n\n';
   for (const item of items) {
     const typeIcon = item.type === 'image' ? '🖼️' : item.type === 'video' ? '🎬' : '📝';
-    message += `${typeIcon} ${item.id} - ${item.title}\n`;
+    const count = item.mediaItems ? item.mediaItems.length : (item.type === 'text' ? 1 : 1);
+    message += `${typeIcon} ${item.id} - ${item.title} (${count} عنصر)\n`;
     message += `📅 ${item.date}\n─────────────────\n`;
   }
 
@@ -976,35 +1040,6 @@ async function handleUserSearch(chatId, text, token, userId) {
       token
     );
   }
-}
-
-// ========== إرسال المحتوى للمستخدم ==========
-
-async function sendContent(chatId, item, token) {
-  const caption = `${item.title}\n\nرقم: ${item.id}\n${item.date}`;
-
-  if (item.type === 'video' || item.type === 'animation') {
-    await sendVideo(chatId, item.fileId, caption, token);
-  } else if (item.type === 'image') {
-    await sendPhoto(chatId, item.fileId, caption, token);
-  } else if (item.type === 'document') {
-    await sendDocument(chatId, item.fileId, caption, token);
-  } else {
-    await sendMessage(chatId, 
-      `${item.title}\n\n${item.content}\n\nرقم: ${item.id}\n${item.date}`,
-      token
-    );
-  }
-
-  await sendMessage(chatId, '🔍 للبحث عن محتوى آخر استخدم الزر:', token, {
-    reply_markup: {
-      keyboard: [
-        ['🔍 البحث عن محتوى'],
-        ['🔙 رجوع']
-      ],
-      resize_keyboard: true
-    }
-  });
 }
 
 // ====================================================================
