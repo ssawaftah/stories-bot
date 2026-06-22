@@ -5,22 +5,20 @@ const approvedUsers = {};
 
 // ========== نظام الواجهة الرئيسية ==========
 const mainInterface = {
-  structure: {},    // المجلدات والأقسام والأزرار
-  order: []         // ترتيب العناصر
+  structure: {},
+  order: []
 };
 
 // ========== نظام المحتوى ==========
 const contentSystem = {
-  sections: {},     // محتوى الأقسام
-  // كل قسم يحتوي على: { title: '', items: [{id, title, content, type}], settings: {} }
+  sections: {}
 };
 
 // ========== حالة الأدمن ==========
 const adminState = {
   currentAction: null,
   step: null,
-  tempData: {},
-  editingTarget: null
+  tempData: {}
 };
 
 // ========== حالة المستخدم ==========
@@ -211,6 +209,8 @@ async function showAdminMainMenu(chatId, token) {
 }
 
 async function handleAdminActions(chatId, text, token) {
+  console.log('Admin action:', text); // للتتبع
+
   switch(text) {
     case '📋 إدارة الطلبات':
       await showRequestsManagement(chatId, token);
@@ -249,6 +249,252 @@ async function handleAdminActions(chatId, text, token) {
       await handleAdminSubActions(chatId, text, token);
       break;
   }
+}
+
+// ====================================================================
+// ========== الإجراءات الفرعية للأدمن ==========
+// ====================================================================
+
+async function handleAdminSubActions(chatId, text, token) {
+  console.log('Admin sub action:', text);
+  console.log('Admin state:', adminState);
+
+  // ===== إنشاء مجلد =====
+  if (text === '📁 إنشاء مجلد') {
+    adminState.currentAction = 'create_folder';
+    adminState.step = 'waiting_name';
+    await sendMessage(chatId, '📁 أدخل اسم المجلد الجديد:', token, {
+      reply_markup: { 
+        keyboard: [['🔙 إلغاء']], 
+        resize_keyboard: true 
+      }
+    });
+    return;
+  }
+
+  // ===== إنشاء قسم =====
+  if (text === '📂 إنشاء قسم') {
+    adminState.currentAction = 'create_section';
+    adminState.step = 'waiting_name';
+    await sendMessage(chatId, '📂 أدخل اسم القسم الجديد:', token, {
+      reply_markup: { 
+        keyboard: [['🔙 إلغاء']], 
+        resize_keyboard: true 
+      }
+    });
+    return;
+  }
+
+  // ===== إنشاء زر =====
+  if (text === '🔘 إنشاء زر') {
+    adminState.currentAction = 'create_button';
+    adminState.step = 'waiting_name';
+    await sendMessage(chatId, '🔘 أدخل اسم الزر الجديد:', token, {
+      reply_markup: { 
+        keyboard: [['🔙 إلغاء']], 
+        resize_keyboard: true 
+      }
+    });
+    return;
+  }
+
+  // ===== تعديل عنصر =====
+  if (text === '✏️ تعديل عنصر') {
+    await showEditElement(chatId, token);
+    return;
+  }
+
+  // ===== حذف عنصر =====
+  if (text === '🗑️ حذف عنصر') {
+    await showDeleteElement(chatId, token);
+    return;
+  }
+
+  // ===== ترتيب العناصر =====
+  if (text === '📊 ترتيب العناصر') {
+    await showReorderElements(chatId, token);
+    return;
+  }
+
+  // ===== نقل قسم لمجلد =====
+  if (text === '📂 نقل قسم لمجلد') {
+    await showMoveSectionToFolder(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - إنشاء قسم محتوى =====
+  if (text === '📂 إنشاء قسم محتوى') {
+    adminState.currentAction = 'create_content_section';
+    adminState.step = 'waiting_name';
+    await sendMessage(chatId, '📂 أدخل اسم قسم المحتوى الجديد:', token, {
+      reply_markup: { 
+        keyboard: [['🔙 إلغاء']], 
+        resize_keyboard: true 
+      }
+    });
+    return;
+  }
+
+  // ===== إدارة المحتوى - تعديل قسم محتوى =====
+  if (text === '✏️ تعديل قسم محتوى') {
+    await showEditContentSection(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - حذف قسم محتوى =====
+  if (text === '🗑️ حذف قسم محتوى') {
+    await showDeleteContentSection(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - إضافة محتوى =====
+  if (text === '➕ إضافة محتوى') {
+    await showAddContent(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - تعديل محتوى =====
+  if (text === '✏️ تعديل محتوى') {
+    await showEditContent(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - حذف محتوى =====
+  if (text === '🗑️ حذف محتوى') {
+    await showDeleteContent(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - ترتيب المحتوى =====
+  if (text === '📊 ترتيب المحتوى') {
+    await showReorderContent(chatId, token);
+    return;
+  }
+
+  // ===== إدارة المحتوى - نسخ محتوى =====
+  if (text === '📋 نسخ محتوى') {
+    await showCopyContent(chatId, token);
+    return;
+  }
+
+  // ===== معالجة إنشاء المجلد =====
+  if (adminState.currentAction === 'create_folder' && adminState.step === 'waiting_name') {
+    await handleCreateFolder(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة إنشاء القسم =====
+  if (adminState.currentAction === 'create_section' && adminState.step === 'waiting_name') {
+    await handleCreateSection(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة إنشاء الزر =====
+  if (adminState.currentAction === 'create_button' && adminState.step === 'waiting_name') {
+    adminState.tempData.buttonName = text;
+    adminState.step = 'waiting_button_content';
+    await sendMessage(chatId, 
+      `🔘 أدخل محتوى الزر "${text}":\n(يمكنك استخدام HTML للتنسيق)`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [['🔙 إلغاء']], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== معالجة حفظ الزر =====
+  if (adminState.currentAction === 'create_button' && adminState.step === 'waiting_button_content') {
+    await handleSaveButton(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة إنشاء قسم محتوى =====
+  if (adminState.currentAction === 'create_content_section' && adminState.step === 'waiting_name') {
+    await handleCreateContentSection(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة تعديل اسم العنصر =====
+  if (adminState.currentAction === 'edit_element' && adminState.step === 'waiting_new_name') {
+    await handleEditElementName(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة تعديل محتوى الزر =====
+  if (adminState.currentAction === 'edit_button' && adminState.step === 'waiting_new_content') {
+    await handleEditButtonContent(chatId, text, token);
+    return;
+  }
+
+  // ===== معالجة إضافة محتوى =====
+  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content_title') {
+    adminState.tempData.currentTitle = text;
+    adminState.step = 'waiting_content_body';
+    await sendMessage(chatId, 
+      `📝 أدخل محتوى "${text}":\n(يمكنك إرسال نص أو فيديو أو صورة)`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [
+            ['✅ حفظ الكل'],
+            ['🔙 إلغاء']
+          ], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== معالجة حفظ محتوى =====
+  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content_body') {
+    await handleAddContentItems(chatId, text, token);
+    return;
+  }
+
+  // ===== حفظ الكل =====
+  if (text === '✅ حفظ الكل' && adminState.currentAction === 'add_content') {
+    await saveContentItems(chatId, token);
+    return;
+  }
+
+  // ===== معالجة تعديل محتوى =====
+  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_edit_title') {
+    adminState.tempData.oldTitle = text;
+    adminState.step = 'waiting_edit_content';
+    await sendMessage(chatId, 
+      `✏️ أدخل المحتوى الجديد:`,
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [['🔙 إلغاء']], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_edit_content') {
+    await handleEditContentItem(chatId, text, token);
+    return;
+  }
+
+  // ===== إلغاء =====
+  if (text === '🔙 إلغاء') {
+    adminState.currentAction = null;
+    adminState.step = null;
+    adminState.tempData = {};
+    await showAdminMainMenu(chatId, token);
+    return;
+  }
+
+  // ===== أي شيء آخر =====
+  await sendMessage(chatId, '⚠️ خيار غير معروف. استخدم الأزرار.', token);
 }
 
 // ====================================================================
@@ -313,7 +559,7 @@ async function showInterfaceManagement(chatId, token) {
   });
 }
 
-// ========== إنشاء عناصر الواجهة ==========
+// ========== إنشاء مجلد ==========
 
 async function handleCreateFolder(chatId, text, token) {
   if (!text || text.trim() === '') {
@@ -339,6 +585,8 @@ async function handleCreateFolder(chatId, text, token) {
   await showInterfaceManagement(chatId, token);
 }
 
+// ========== إنشاء قسم ==========
+
 async function handleCreateSection(chatId, text, token) {
   if (!text || text.trim() === '') {
     await sendMessage(chatId, '⚠️ الرجاء إدخال اسم صالح:', token);
@@ -350,7 +598,6 @@ async function handleCreateSection(chatId, text, token) {
     return;
   }
 
-  // التحقق من وجود محتوى لهذا القسم
   if (!contentSystem.sections[text]) {
     contentSystem.sections[text] = {
       title: text,
@@ -377,26 +624,7 @@ async function handleCreateSection(chatId, text, token) {
   await showInterfaceManagement(chatId, token);
 }
 
-async function handleCreateButton(chatId, text, token) {
-  if (!text || text.trim() === '') {
-    await sendMessage(chatId, '⚠️ الرجاء إدخال اسم صالح:', token);
-    return;
-  }
-
-  if (mainInterface.structure[text]) {
-    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
-    return;
-  }
-
-  adminState.tempData.buttonName = text;
-  adminState.step = 'waiting_button_content';
-  
-  await sendMessage(chatId, 
-    `🔘 أدخل محتوى الزر "${text}":\n(يمكنك استخدام HTML للتنسيق)`,
-    token,
-    { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
-  );
-}
+// ========== إنشاء زر ==========
 
 async function handleSaveButton(chatId, text, token) {
   const name = adminState.tempData.buttonName;
@@ -415,7 +643,7 @@ async function handleSaveButton(chatId, text, token) {
   await showInterfaceManagement(chatId, token);
 }
 
-// ========== تعديل وحذف وترتيب العناصر ==========
+// ========== تعديل عنصر ==========
 
 async function showEditElement(chatId, token) {
   const list = Object.keys(mainInterface.structure);
@@ -436,6 +664,68 @@ async function showEditElement(chatId, token) {
   });
 }
 
+async function handleEditElementName(chatId, text, token) {
+  const oldName = adminState.tempData.oldName;
+  const element = mainInterface.structure[oldName];
+  
+  if (!element) {
+    await sendMessage(chatId, '⚠️ العنصر غير موجود!', token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    return;
+  }
+
+  if (mainInterface.structure[text] && text !== oldName) {
+    await sendMessage(chatId, '⚠️ هذا الاسم موجود بالفعل!', token);
+    return;
+  }
+
+  delete mainInterface.structure[oldName];
+  mainInterface.structure[text] = element;
+  
+  const index = mainInterface.order.indexOf(oldName);
+  if (index !== -1) mainInterface.order[index] = text;
+
+  for (const key of Object.keys(mainInterface.structure)) {
+    if (mainInterface.structure[key].type === 'folder') {
+      const children = mainInterface.structure[key].children;
+      const childIndex = children.indexOf(oldName);
+      if (childIndex !== -1) {
+        children[childIndex] = text;
+      }
+    }
+  }
+
+  await sendMessage(chatId, `✅ تم تعديل الاسم إلى "${text}"`, token);
+  adminState.currentAction = null;
+  adminState.step = null;
+  adminState.tempData = {};
+  await showInterfaceManagement(chatId, token);
+}
+
+async function handleEditButtonContent(chatId, text, token) {
+  const name = adminState.tempData.buttonName;
+  const element = mainInterface.structure[name];
+  
+  if (!element || element.type !== 'button') {
+    await sendMessage(chatId, '⚠️ الزر غير موجود!', token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    return;
+  }
+
+  element.content = text;
+  element.updated = new Date().toLocaleString('ar-EG');
+
+  await sendMessage(chatId, `✅ تم تحديث محتوى الزر "${name}"`, token);
+  adminState.currentAction = null;
+  adminState.step = null;
+  adminState.tempData = {};
+  await showInterfaceManagement(chatId, token);
+}
+
+// ========== حذف عنصر ==========
+
 async function showDeleteElement(chatId, token) {
   const list = Object.keys(mainInterface.structure);
   if (list.length === 0) {
@@ -454,6 +744,8 @@ async function showDeleteElement(chatId, token) {
     reply_markup: { inline_keyboard: buttons }
   });
 }
+
+// ========== ترتيب العناصر ==========
 
 async function showReorderElements(chatId, token) {
   if (mainInterface.order.length === 0) {
@@ -479,6 +771,8 @@ async function showReorderElements(chatId, token) {
     reply_markup: { inline_keyboard: buttons }
   });
 }
+
+// ========== نقل قسم لمجلد ==========
 
 async function showMoveSectionToFolder(chatId, token) {
   const sections = Object.keys(mainInterface.structure).filter(
@@ -510,7 +804,7 @@ async function showMoveSectionToFolder(chatId, token) {
 }
 
 // ====================================================================
-// ========== إدارة المحتوى المتقدمة ==========
+// ========== إدارة المحتوى ==========
 // ====================================================================
 
 async function showContentManagementMain(chatId, token) {
@@ -577,6 +871,42 @@ async function handleCreateContentSection(chatId, text, token) {
   await showContentManagementMain(chatId, token);
 }
 
+// ========== تعديل وحذف قسم محتوى ==========
+
+async function showEditContentSection(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `✏️ ${section}`, callback_data: `edit_content_section_name_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '✏️ اختر قسم المحتوى لتعديل اسمه:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showDeleteContentSection(chatId, token) {
+  const sections = Object.keys(contentSystem.sections);
+  if (sections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام محتوى', token);
+    return;
+  }
+
+  const buttons = sections.map(section => [
+    { text: `🗑️ ${section}`, callback_data: `delete_content_section_confirm_${section}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, '🗑️ اختر قسم المحتوى للحذف:', token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
 // ========== إضافة محتوى ==========
 
 async function showAddContent(chatId, token) {
@@ -610,57 +940,33 @@ async function handleAddContentItems(chatId, text, token) {
     return;
   }
 
-  // حفظ العنوان أولاً
-  if (adminState.step === 'waiting_content_title') {
-    adminState.tempData.currentTitle = text;
-    adminState.step = 'waiting_content_body';
-    await sendMessage(chatId, 
-      `📝 أدخل محتوى "${text}":\n(يمكنك إرسال نص أو فيديو أو صورة)`,
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            ['✅ حفظ الكل'],
-            ['🔙 إلغاء']
-          ], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
+  if (!adminState.tempData.items) {
+    adminState.tempData.items = [];
   }
+  
+  adminState.tempData.items.push({
+    id: Date.now() + Math.random(),
+    title: adminState.tempData.currentTitle || 'بدون عنوان',
+    content: text,
+    type: detectContentType(text),
+    created: new Date().toLocaleString('ar-EG')
+  });
 
-  // حفظ المحتوى
-  if (adminState.step === 'waiting_content_body') {
-    if (!adminState.tempData.items) {
-      adminState.tempData.items = [];
+  await sendMessage(chatId, 
+    `✅ تم إضافة "${adminState.tempData.currentTitle}"\n\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
+    token,
+    { 
+      reply_markup: { 
+        keyboard: [
+          ['✅ حفظ الكل'],
+          ['🔙 إلغاء']
+        ], 
+        resize_keyboard: true 
+      }
     }
-    
-    adminState.tempData.items.push({
-      id: Date.now() + Math.random(),
-      title: adminState.tempData.currentTitle || 'بدون عنوان',
-      content: text,
-      type: detectContentType(text),
-      created: new Date().toLocaleString('ar-EG')
-    });
-
-    await sendMessage(chatId, 
-      `✅ تم إضافة "${adminState.tempData.currentTitle}"\n\n📝 أدخل عنوان التالي أو اضغط "حفظ الكل":`,
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            ['✅ حفظ الكل'],
-            ['🔙 إلغاء']
-          ], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    
-    adminState.step = 'waiting_content_title';
-    return;
-  }
+  );
+  
+  adminState.step = 'waiting_content_title';
 }
 
 function detectContentType(text) {
@@ -707,7 +1013,7 @@ async function saveContentItems(chatId, token) {
   await showContentManagementMain(chatId, token);
 }
 
-// ========== تعديل المحتوى ==========
+// ========== تعديل محتوى ==========
 
 async function showEditContent(chatId, token) {
   const sections = Object.keys(contentSystem.sections);
@@ -726,23 +1032,6 @@ async function showEditContent(chatId, token) {
   });
 }
 
-async function showEditContentItems(chatId, sectionName, token) {
-  const section = contentSystem.sections[sectionName];
-  if (!section || !section.items || section.items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لتعديله', token);
-    return;
-  }
-
-  const buttons = section.items.map((item, index) => [
-    { text: `✏️ ${item.title}`, callback_data: `edit_item_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, `✏️ اختر المحتوى لتعديله في "${sectionName}":`, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
 async function handleEditContentItem(chatId, text, token) {
   const sectionName = adminState.tempData.sectionName;
   const itemIndex = adminState.tempData.itemIndex;
@@ -755,34 +1044,17 @@ async function handleEditContentItem(chatId, text, token) {
     return;
   }
 
-  if (adminState.step === 'waiting_edit_title') {
-    adminState.tempData.oldTitle = section.items[itemIndex].title;
-    adminState.tempData.oldContent = section.items[itemIndex].content;
-    section.items[itemIndex].title = text;
-    adminState.step = 'waiting_edit_content';
-    
-    await sendMessage(chatId, 
-      `✏️ أدخل المحتوى الجديد (كان: ${adminState.tempData.oldContent.substring(0, 50)}...)`,
-      token,
-      { reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true } }
-    );
-    return;
-  }
-
-  if (adminState.step === 'waiting_edit_content') {
-    section.items[itemIndex].content = text;
-    section.items[itemIndex].updated = new Date().toLocaleString('ar-EG');
-    
-    await sendMessage(chatId, `✅ تم تحديث المحتوى بنجاح!`, token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    adminState.tempData = {};
-    await showContentManagementMain(chatId, token);
-    return;
-  }
+  section.items[itemIndex].content = text;
+  section.items[itemIndex].updated = new Date().toLocaleString('ar-EG');
+  
+  await sendMessage(chatId, `✅ تم تحديث المحتوى بنجاح!`, token);
+  adminState.currentAction = null;
+  adminState.step = null;
+  adminState.tempData = {};
+  await showContentManagementMain(chatId, token);
 }
 
-// ========== حذف المحتوى ==========
+// ========== حذف محتوى ==========
 
 async function showDeleteContent(chatId, token) {
   const sections = Object.keys(contentSystem.sections);
@@ -797,23 +1069,6 @@ async function showDeleteContent(chatId, token) {
   buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
 
   await sendMessage(chatId, '📂 اختر القسم لحذف محتوى:', token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function showDeleteContentItems(chatId, sectionName, token) {
-  const section = contentSystem.sections[sectionName];
-  if (!section || !section.items || section.items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لحذفه', token);
-    return;
-  }
-
-  const buttons = section.items.map((item, index) => [
-    { text: `🗑️ ${item.title}`, callback_data: `delete_item_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, `🗑️ اختر المحتوى للحذف من "${sectionName}":`, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
@@ -837,30 +1092,6 @@ async function showReorderContent(chatId, token) {
   });
 }
 
-async function showReorderContentItems(chatId, sectionName, token) {
-  const section = contentSystem.sections[sectionName];
-  if (!section || !section.items || section.items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لترتيبه', token);
-    return;
-  }
-
-  let message = `📊 ترتيب محتوى "${sectionName}":\n\n`;
-  section.items.forEach((item, index) => {
-    message += `${index + 1}. ${item.title}\n`;
-  });
-
-  message += '\n🔹 اختر عنصراً لنقله:';
-
-  const buttons = section.items.map((item, index) => [
-    { text: `${index + 1}. ${item.title}`, callback_data: `content_reorder_select_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
 // ========== نسخ محتوى ==========
 
 async function showCopyContent(chatId, token) {
@@ -876,29 +1107,6 @@ async function showCopyContent(chatId, token) {
   buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
 
   await sendMessage(chatId, '📂 اختر القسم لنسخ محتوى:', token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function showCopyContentItems(chatId, sectionName, token) {
-  const section = contentSystem.sections[sectionName];
-  if (!section || !section.items || section.items.length === 0) {
-    await sendMessage(chatId, '📂 لا يوجد محتوى لنسخه', token);
-    return;
-  }
-
-  const targetSections = Object.keys(contentSystem.sections).filter(s => s !== sectionName);
-  if (targetSections.length === 0) {
-    await sendMessage(chatId, '⚠️ لا توجد أقسام أخرى للنسخ إليها', token);
-    return;
-  }
-
-  const buttons = section.items.map((item, index) => [
-    { text: `📋 ${item.title}`, callback_data: `copy_item_select_${sectionName}_${index}` }
-  ]);
-  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, `📋 اختر المحتوى لنسخه من "${sectionName}":`, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
@@ -1052,6 +1260,8 @@ async function showSectionContent(chatId, sectionName, token) {
 // ====================================================================
 
 async function handleAdminCallback(data, chatId, messageId, token) {
+  console.log('Admin callback:', data);
+
   // ===== رجوع =====
   if (data === 'admin_back') {
     await showAdminMainMenu(chatId, token);
@@ -1279,6 +1489,29 @@ async function handleAdminCallback(data, chatId, messageId, token) {
   if (data.startsWith('edit_content_section_')) {
     const sectionName = data.replace('edit_content_section_', '');
     await showEditContentItems(chatId, sectionName, token);
+    return;
+  }
+
+  if (data.startsWith('edit_content_section_name_')) {
+    const sectionName = data.replace('edit_content_section_name_', '');
+    adminState.currentAction = 'edit_content_section_name';
+    adminState.step = 'waiting_new_name';
+    adminState.tempData.oldName = sectionName;
+    
+    await sendMessage(chatId, `✏️ أدخل الاسم الجديد لقسم المحتوى "${sectionName}":`, token, {
+      reply_markup: { keyboard: [['🔙 إلغاء']], resize_keyboard: true }
+    });
+    return;
+  }
+
+  if (data.startsWith('delete_content_section_confirm_')) {
+    const sectionName = data.replace('delete_content_section_confirm_', '');
+    
+    if (contentSystem.sections[sectionName]) {
+      delete contentSystem.sections[sectionName];
+      await sendMessage(chatId, `✅ تم حذف قسم المحتوى "${sectionName}"`, token);
+      await showContentManagementMain(chatId, token);
+    }
     return;
   }
 
@@ -1608,6 +1841,89 @@ async function showApprovedUsers(chatId, token) {
   buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_back' }]);
 
   await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+// ========== وظائف إدارة المحتوى المساعدة ==========
+
+async function showEditContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لتعديله', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `✏️ ${item.title}`, callback_data: `edit_item_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `✏️ اختر المحتوى لتعديله في "${sectionName}":`, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showDeleteContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لحذفه', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `🗑️ ${item.title}`, callback_data: `delete_item_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `🗑️ اختر المحتوى للحذف من "${sectionName}":`, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showReorderContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لترتيبه', token);
+    return;
+  }
+
+  let message = `📊 ترتيب محتوى "${sectionName}":\n\n`;
+  section.items.forEach((item, index) => {
+    message += `${index + 1}. ${item.title}\n`;
+  });
+
+  message += '\n🔹 اختر عنصراً لنقله:';
+
+  const buttons = section.items.map((item, index) => [
+    { text: `${index + 1}. ${item.title}`, callback_data: `content_reorder_select_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
+async function showCopyContentItems(chatId, sectionName, token) {
+  const section = contentSystem.sections[sectionName];
+  if (!section || !section.items || section.items.length === 0) {
+    await sendMessage(chatId, '📂 لا يوجد محتوى لنسخه', token);
+    return;
+  }
+
+  const targetSections = Object.keys(contentSystem.sections).filter(s => s !== sectionName);
+  if (targetSections.length === 0) {
+    await sendMessage(chatId, '⚠️ لا توجد أقسام أخرى للنسخ إليها', token);
+    return;
+  }
+
+  const buttons = section.items.map((item, index) => [
+    { text: `📋 ${item.title}`, callback_data: `copy_item_select_${sectionName}_${index}` }
+  ]);
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_content_back' }]);
+
+  await sendMessage(chatId, `📋 اختر المحتوى لنسخه من "${sectionName}":`, token, {
     reply_markup: { inline_keyboard: buttons }
   });
 }
