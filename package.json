@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "src/bot.js",
   "scripts": {
-    "deploy": "wrangler deploy"
+    "deploy": "npx wrangler deploy"
   },
   "dependencies": {
     "itty-router": "^4.0.0"
