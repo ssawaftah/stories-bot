@@ -1,14 +1,6 @@
-name = "niswangy-bot"
-main = "src/bot.js"
+name = "telegram-verification-bot"
+main = "worker.js"
 compatibility_date = "2024-01-01"
 
-[[kv_namespaces]]
-binding = "NISWANGY_DB"
-id = "cf623b9ec96d4c0290308302df20fb20"
-preview_id = "cf623b9ec96d4c0290308302df20fb20"
-
-[vars]
-BOT_TOKEN = "8907171536:AAGY5CoYuQlUja1hjDyuj9CfZE3lPvqk4-M"
-ADMIN_ID = "6455001010"
-CHANNEL_USERNAME = "@niswangy_channel"
-FORCE_SUBSCRIBE = "true"
+# المتغيرات ستضاف من Cloudflare Dashboard مباشرة
+# لا تضع قيم حساسة هنا
