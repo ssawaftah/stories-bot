@@ -4,7 +4,10 @@ let rejectedUsers = {};
 let approvedUsers = {};
 let contentSystem = { items: {} };
 let mandatorySubscription = { channels: [], groups: [], enabled: false };
-let botSettings = { aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته', logChannel: 'ineswangelogs' };
+let botSettings = { 
+  aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته', 
+  logChannel: 'ineswangelogs' 
+};
 let textSystem = {};
 
 // ========== حالة الأدمن ==========
@@ -105,7 +108,6 @@ async function loadDataFromKV(env) {
     if (textsData) {
       textSystem = textsData;
     } else {
-      // النصوص الافتراضية
       textSystem = getDefaultTexts();
       await env.KV_NAMESPACE.put(KV_KEYS.TEXTS, JSON.stringify(textSystem));
     }
@@ -113,7 +115,6 @@ async function loadDataFromKV(env) {
     console.log('✅ Data loaded from KV successfully');
   } catch (error) {
     console.error('Error loading data from KV:', error);
-    // إذا فشل التحميل، استخدم النصوص الافتراضية
     textSystem = getDefaultTexts();
   }
 }
@@ -129,7 +130,6 @@ async function saveUsersToKV(env) {
 
 async function saveContentToKV(env) {
   try {
-    // حفظ فقط metadata (بدون ملفات الفيديو)
     const data = { items: contentSystem.items };
     await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify(data));
   } catch (error) {
@@ -259,7 +259,14 @@ function getDefaultTexts() {
       edit_text_prompt: '✏️ تعديل النص: {key}\n\nالنص الحالي:\n{current}\n\nأدخل النص الجديد:',
       text_updated: '✅ تم تحديث النص: {key}',
       text_not_found: '⚠️ النص غير موجود',
-      no_texts: '📋 لا توجد نصوص'
+      no_texts: '📋 لا توجد نصوص',
+      export_import: '🔄 تصدير/استيراد البيانات\n\n📤 تصدير: حفظ جميع البيانات (مستخدمين، محتوى، إعدادات، نصوص)\n📥 استيراد: استعادة البيانات من نسخة محفوظة',
+      export_success: '✅ تم تصدير البيانات بنجاح!\n\nعدد المستخدمين: {users}\nعدد المحتويات: {content}\nعدد النصوص: {texts}\n\n📌 انسخ البيانات أدناه للاستيراد لاحقاً:',
+      import_prompt: '📥 أرسل بيانات JSON للاستيراد:',
+      import_success: '✅ تم استيراد البيانات بنجاح!\n\nعدد المستخدمين: {users}\nعدد المحتويات: {content}\nعدد النصوص: {texts}',
+      import_error: '⚠️ فشل استيراد البيانات. تأكد من صحة التنسيق.',
+      export_button: '📤 تصدير البيانات',
+      import_button: '📥 استيراد البيانات'
     }
   };
 }
@@ -287,17 +294,26 @@ function getAdminText(key, replacements = {}) {
 }
 
 // ====================================================================
-// ========== دوال التسجيل ==========
+// ========== دوال التسجيل (قناة الأحداث) ==========
 // ====================================================================
 
 async function sendLog(message, token) {
   const logChannel = botSettings.logChannel;
-  if (!logChannel) return;
+  if (!logChannel) {
+    console.log('⚠️ لا توجد قناة تسجيل محددة');
+    return;
+  }
   
   try {
-    await sendMessage(logChannel, message, token);
+    console.log(`📤 إرسال سجل إلى: ${logChannel}`);
+    const result = await sendMessage(logChannel, message, token);
+    if (result && result.ok) {
+      console.log('✅ تم إرسال السجل بنجاح');
+    } else {
+      console.log('❌ فشل إرسال السجل:', result);
+    }
   } catch (error) {
-    console.error('Error sending log:', error);
+    console.error('❌ خطأ في إرسال السجل:', error);
   }
 }
 
@@ -316,6 +332,92 @@ async function logUserAction(userId, username, action, details, token) {
 ─────────────────`;
 
   await sendLog(logMessage, token);
+}
+
+// ====================================================================
+// ========== دوال التصدير والاستيراد ==========
+// ====================================================================
+
+async function exportAllData(chatId, token) {
+  const exportData = {
+    version: '1.0',
+    exportedAt: new Date().toLocaleString('ar-EG'),
+    users: {
+      pending: pendingUsers,
+      rejected: rejectedUsers,
+      approved: approvedUsers
+    },
+    content: contentSystem.items,
+    subscription: mandatorySubscription,
+    settings: botSettings,
+    texts: textSystem
+  };
+
+  const jsonData = JSON.stringify(exportData, null, 2);
+  
+  // تقسيم البيانات إذا كانت كبيرة جداً
+  if (jsonData.length > 4000) {
+    const parts = jsonData.match(/[\s\S]{1,4000}/g) || [];
+    await sendMessage(chatId, getAdminText('export_success', {
+      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
+      content: Object.keys(contentSystem.items).length,
+      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
+    }), token);
+    
+    for (let i = 0; i < parts.length; i++) {
+      await sendMessage(chatId, `📄 الجزء ${i + 1}/${parts.length}:\n\n<pre>${parts[i]}</pre>`, token, { parse_mode: 'HTML' });
+    }
+  } else {
+    await sendMessage(chatId, getAdminText('export_success', {
+      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
+      content: Object.keys(contentSystem.items).length,
+      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
+    }) + `\n\n<pre>${jsonData}</pre>`, token, { parse_mode: 'HTML' });
+  }
+}
+
+async function importAllData(chatId, text, token, env) {
+  try {
+    const data = JSON.parse(text);
+    
+    // التحقق من صحة البيانات
+    if (!data.users || !data.content || !data.subscription || !data.settings || !data.texts) {
+      throw new Error('بيانات غير مكتملة');
+    }
+
+    // استيراد المستخدمين
+    pendingUsers = data.users.pending || {};
+    rejectedUsers = data.users.rejected || {};
+    approvedUsers = data.users.approved || {};
+    await saveUsersToKV(env);
+
+    // استيراد المحتوى
+    contentSystem.items = data.content || {};
+    await saveContentToKV(env);
+
+    // استيراد الاشتراك الإجباري
+    mandatorySubscription = data.subscription || { channels: [], groups: [], enabled: false };
+    await saveSubscriptionToKV(env);
+
+    // استيراد الإعدادات
+    botSettings = data.settings || botSettings;
+    await saveSettingsToKV(env);
+
+    // استيراد النصوص
+    textSystem = data.texts || getDefaultTexts();
+    await saveTextsToKV(env);
+
+    await sendMessage(chatId, getAdminText('import_success', {
+      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
+      content: Object.keys(contentSystem.items).length,
+      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
+    }), token);
+    
+    await showAdminMainMenu(chatId, token);
+  } catch (error) {
+    console.error('Import error:', error);
+    await sendMessage(chatId, getAdminText('import_error'), token);
+  }
 }
 
 // ====================================================================
@@ -493,6 +595,9 @@ async function handleTelegramUpdate(update, env) {
 
         const adminMsg = `📢 طلب انضمام جديد!\n👤 ${userData.name}\n🆔 @${userData.username}\n📱 ${userData.phone}`;
         await sendMessage(ADMIN_ID, adminMsg, token);
+        
+        // تسجيل في قناة الأحداث
+        await logUserAction(userId, userData.username, '📋 طلب انضمام', `الاسم: ${userData.name}`, token);
         return;
       }
 
@@ -550,7 +655,8 @@ async function showAdminMainMenu(chatId, token) {
         ['➕ إضافة محتوى', '📋 إدارة الطلبات'],
         ['📦 إدارة المحتوى', '🔗 الاشتراك الإجباري'],
         ['📝 إدارة النصوص', '⚙️ إعدادات البوت'],
-        ['📊 الإحصائيات', getAdminText('back')]
+        ['🔄 تصدير/استيراد', '📊 الإحصائيات'],
+        [getAdminText('back')]
       ],
       resize_keyboard: true
     }
@@ -594,6 +700,10 @@ async function handleAdminActions(chatId, text, token, env) {
       await showBotSettings(chatId, token);
       break;
       
+    case '🔄 تصدير/استيراد':
+      await showExportImport(chatId, token);
+      break;
+      
     case '📊 الإحصائيات':
       await showStatistics(chatId, token);
       break;
@@ -611,6 +721,24 @@ async function handleAdminActions(chatId, text, token, env) {
       await handleAdminSubActions(chatId, text, token, env);
       break;
   }
+}
+
+// ====================================================================
+// ========== تصدير/استيراد ==========
+// ====================================================================
+
+async function showExportImport(chatId, token) {
+  const message = getAdminText('export_import');
+
+  await sendMessage(chatId, message, token, {
+    reply_markup: {
+      keyboard: [
+        ['📤 تصدير البيانات', '📥 استيراد البيانات'],
+        [getAdminText('back')]
+      ],
+      resize_keyboard: true
+    }
+  });
 }
 
 // ====================================================================
@@ -852,6 +980,37 @@ async function handleAdminSubActions(chatId, text, token, env) {
   // ===== تعديل النصوص =====
   if (adminState.currentAction === 'edit_text' && adminState.step === 'waiting_text') {
     await saveEditedText(chatId, text, token, env);
+    return;
+  }
+
+  // ===== تصدير البيانات =====
+  if (text === '📤 تصدير البيانات') {
+    await exportAllData(chatId, token);
+    return;
+  }
+
+  // ===== استيراد البيانات =====
+  if (text === '📥 استيراد البيانات') {
+    adminState.currentAction = 'import_data';
+    adminState.step = 'waiting_data';
+    await sendMessage(chatId, 
+      getAdminText('import_prompt'),
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [[getAdminText('cancel')]], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  // ===== معالجة استيراد البيانات =====
+  if (adminState.currentAction === 'import_data' && adminState.step === 'waiting_data') {
+    await importAllData(chatId, text, token, env);
+    adminState.currentAction = null;
+    adminState.step = null;
     return;
   }
 
@@ -1771,6 +1930,7 @@ async function sendMessage(chatId, text, token, options = {}) {
     return await response.json();
   } catch (error) {
     console.error('Error sending message:', error);
+    return { ok: false, error: error.message };
   }
 }
 
