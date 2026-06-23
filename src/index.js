@@ -797,10 +797,9 @@ async function saveSingleContent(chatId, token) {
 // ====================================================================
 
 async function showUserMainMenu(chatId, token) {
-  const message = `🎉 مرحباً بك في البوت!
+  const message = `هاد البوت مصمم خصيصاً للشرموطات والقحاب الي مو لاقيين حد يريح شهوتهم مافي اي ذكر بيقدر يستخدم البوت لهيك تمتعي *يا شرموطة*
 
-🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.
-📌 أو استخدم الأزرار أدناه:`;
+لو بدك تتمتعي اكثر بسرية تامة نعمل ونتخيل حوارات تواصلي مع *الملكة نورهان* : @c4xxs`;
 
   await sendMessage(chatId, message, token, {
     reply_markup: {
@@ -938,7 +937,8 @@ async function sendContent(chatId, item, token) {
     );
   }
 
-  await sendMessage(chatId, 'اختر الإجراء:', token, {
+  await sendMessage(chatId, 'هاد البوت مصمم خصيصاً للشرموطات والقحاب الي مو لاقيين حد يريح شهوتهم مافي اي ذكر بيقدر يستخدم البوت لهيك تمتعي *يا شرموطة*
+لو بدك تتمتعي اكثر بسرية تامة نعمل ونتخيل حوارات تواصلي مع *الملكة نورهان* : @c4xxs', token, {
     reply_markup: {
       keyboard: [
         ['🔍 البحث عن محتوى'],
