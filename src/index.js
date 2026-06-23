@@ -16,7 +16,7 @@ const mandatorySubscription = {
 };
 
 // ========== إعدادات البوت ==========
-const botSettings = {
+let botSettings = {
   aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
   logChannel: 'ineswangelogs'
 };
@@ -34,6 +34,9 @@ const userState = {};
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    
+    // تحديث إعدادات البوت من المتغيرات البيئية
+    botSettings.logChannel = env.LOG_CHANNEL_ID || 'ineswangelogs';
     
     if (url.pathname === '/') {
       return new Response('Bot is running!', {
@@ -69,6 +72,120 @@ export default {
     return new Response('Not found', { status: 404 });
   }
 };
+
+// ====================================================================
+// ========== دوال التسجيل (Logging) ==========
+// ====================================================================
+
+async function sendLog(message, token) {
+  const logChannel = botSettings.logChannel;
+  if (!logChannel) {
+    console.log('No log channel set');
+    return;
+  }
+  
+  try {
+    console.log(`Sending log to channel: ${logChannel}`);
+    const result = await sendMessage(logChannel, message, token);
+    console.log('Log sent successfully');
+    return result;
+  } catch (error) {
+    console.error('Error sending log to channel:', error);
+    // محاولة بديلة بإرسال بدون parse_mode
+    try {
+      const url = `https://api.telegram.org/bot${token}/sendMessage`;
+      const payload = {
+        chat_id: logChannel,
+        text: message
+      };
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      console.log('Alternative log send result:', data);
+    } catch (e) {
+      console.error('Failed to send log:', e);
+    }
+  }
+}
+
+async function logUserAction(userId, username, action, details, token) {
+  const timestamp = new Date().toLocaleString('ar-EG');
+  const userDisplay = username ? `@${username}` : `ID: ${userId}`;
+  
+  const logMessage = `
+📋 سجل الإجراءات
+
+👤 المستخدم: ${userDisplay}
+🆔 المعرف: ${userId}
+⚡ الإجراء: ${action}
+📝 التفاصيل: ${details}
+🕐 الوقت: ${timestamp}
+─────────────────`;
+
+  await sendLog(logMessage, token);
+}
+
+// ====================================================================
+// ========== نظام الاشتراك الإجباري ==========
+// ====================================================================
+
+async function checkMandatorySubscription(userId, token) {
+  if (!mandatorySubscription.enabled) return true;
+  
+  try {
+    for (const channel of mandatorySubscription.channels) {
+      const chatMember = await getChatMember(channel, userId, token);
+      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
+        return false;
+      }
+    }
+    
+    for (const group of mandatorySubscription.groups) {
+      const chatMember = await getChatMember(group, userId, token);
+      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
+        return false;
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error checking subscription:', error);
+    return true;
+  }
+}
+
+async function getChatMember(chatId, userId, token) {
+  const url = `https://api.telegram.org/bot${token}/getChatMember`;
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, user_id: userId })
+    });
+    const data = await response.json();
+    return data.result;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function sendSubscriptionMessage(chatId, token) {
+  let message = '🔐 للوصول إلى محتوى البوت، يجب عليك الاشتراك في القنوات التالية:\n\n';
+  
+  for (const channel of mandatorySubscription.channels) {
+    message += `• ${channel}\n`;
+  }
+  for (const group of mandatorySubscription.groups) {
+    message += `• ${group}\n`;
+  }
+  
+  message += '\n✅ بعد الاشتراك، اضغط /start مرة أخرى.';
+  
+  await sendMessage(chatId, message, token);
+}
 
 async function handleTelegramUpdate(update, env) {
   const token = env.BOT_TOKEN;
@@ -223,96 +340,6 @@ async function handleTelegramUpdate(update, env) {
   } catch (error) {
     console.error('Error in handleTelegramUpdate:', error);
   }
-}
-
-// ====================================================================
-// ========== دوال التسجيل (Logging) ==========
-// ====================================================================
-
-async function sendLog(message, token) {
-  const logChannel = botSettings.logChannel;
-  if (!logChannel) return;
-  
-  try {
-    await sendMessage(logChannel, message, token);
-  } catch (error) {
-    console.error('Error sending log:', error);
-  }
-}
-
-async function logUserAction(userId, username, action, details, token) {
-  const timestamp = new Date().toLocaleString('ar-EG');
-  const userDisplay = username ? `@${username}` : `ID: ${userId}`;
-  
-  const logMessage = `
-📋 سجل الإجراءات
-
-👤 المستخدم: ${userDisplay}
-🆔 المعرف: ${userId}
-⚡ الإجراء: ${action}
-📝 التفاصيل: ${details}
-🕐 الوقت: ${timestamp}
-─────────────────`;
-
-  await sendLog(logMessage, token);
-}
-
-// ====================================================================
-// ========== نظام الاشتراك الإجباري ==========
-// ====================================================================
-
-async function checkMandatorySubscription(userId, token) {
-  if (!mandatorySubscription.enabled) return true;
-  
-  try {
-    for (const channel of mandatorySubscription.channels) {
-      const chatMember = await getChatMember(channel, userId, token);
-      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
-        return false;
-      }
-    }
-    
-    for (const group of mandatorySubscription.groups) {
-      const chatMember = await getChatMember(group, userId, token);
-      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
-        return false;
-      }
-    }
-    
-    return true;
-  } catch (error) {
-    return true;
-  }
-}
-
-async function getChatMember(chatId, userId, token) {
-  const url = `https://api.telegram.org/bot${token}/getChatMember`;
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, user_id: userId })
-    });
-    const data = await response.json();
-    return data.result;
-  } catch (error) {
-    return null;
-  }
-}
-
-async function sendSubscriptionMessage(chatId, token) {
-  let message = '🔐 للوصول إلى محتوى البوت، يجب عليك الاشتراك في القنوات التالية:\n\n';
-  
-  for (const channel of mandatorySubscription.channels) {
-    message += `• ${channel}\n`;
-  }
-  for (const group of mandatorySubscription.groups) {
-    message += `• ${group}\n`;
-  }
-  
-  message += '\n✅ بعد الاشتراك، اضغط /start مرة أخرى.';
-  
-  await sendMessage(chatId, message, token);
 }
 
 // ====================================================================
@@ -1103,7 +1130,7 @@ async function showBotSettings(chatId, token) {
 📝 نص "عن البوت":
 ${botSettings.aboutText}
 
-📢 قناة التسجيل: @${botSettings.logChannel}
+📢 قناة التسجيل: ${botSettings.logChannel}
 
 الإجراءات:`;
 
@@ -1141,7 +1168,7 @@ async function showStatistics(chatId, token) {
 • 👥 مجموعات: ${mandatorySubscription.groups.length}
 • 📌 الحالة: ${mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل'}
 
-📢 قناة التسجيل: @${botSettings.logChannel}
+📢 قناة التسجيل: ${botSettings.logChannel}
 
 ⏱️ آخر تحديث: ${new Date().toLocaleString('ar-EG')}`;
 
@@ -1255,6 +1282,10 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       delete pendingUsers[targetId];
       delete rejectedUsers[targetId];
       
+      // تسجيل الإجراء
+      const username = pendingUsers[targetId]?.username || null;
+      await logUserAction(targetId, username, '✅ موافقة', 'تمت الموافقة على طلب الانضمام', token);
+      
       await sendMessage(targetId, '✅ تمت الموافقة! اضغط /start', token, {
         reply_markup: { remove_keyboard: true }
       });
@@ -1271,6 +1302,10 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       delete pendingUsers[targetId];
       delete approvedUsers[targetId];
       
+      // تسجيل الإجراء
+      const username = pendingUsers[targetId]?.username || null;
+      await logUserAction(targetId, username, '❌ رفض', 'تم رفض طلب الانضمام', token);
+      
       await sendMessage(targetId, '❌ طلبك مرفوض. للتواصل: @jahab', token, {
         reply_markup: { remove_keyboard: true }
       });
@@ -1286,6 +1321,10 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       approvedUsers[targetId] = rejectedUsers[targetId];
       delete rejectedUsers[targetId];
       delete pendingUsers[targetId];
+      
+      // تسجيل الإجراء
+      const username = rejectedUsers[targetId]?.username || null;
+      await logUserAction(targetId, username, '✅ إعادة موافقة', 'تم إعادة الموافقة على الطلب', token);
       
       await sendMessage(targetId, '✅ تم استئناف طلبك! اضغط /start', token, {
         reply_markup: { remove_keyboard: true }
