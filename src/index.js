@@ -17,7 +17,6 @@ const mandatorySubscription = {
 
 // ========== نظام النصوص ==========
 const textSystem = {
-  // نصوص المستخدم
   user: {
     welcome: '🎉 مرحباً بك في البوت!\n\n🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.\n📌 أو استخدم الأزرار أدناه:',
     search_prompt: 'أرسل رقم المحتوى الذي تريد مشاهدته:',
@@ -43,7 +42,6 @@ const textSystem = {
     photo_error: '⚠️ حدث خطأ في عرض الصورة',
     document_error: '⚠️ حدث خطأ في عرض الملف'
   },
-  // نصوص الأدمن
   admin: {
     welcome: '👋 مرحباً بك في لوحة التحكم\n\n📊 الإحصائيات:\n• 📋 طلبات جديدة: {pending}\n• 📦 محتوى: {content}\n• 🔗 اشتراكات إجبارية: {subscription}\n\n📌 اختر الإدارة المناسبة:',
     add_content_title: '➕ إضافة محتوى جديد\n\nاختر نوع المحتوى:',
@@ -128,7 +126,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
-    botSettings.logChannel = env.LOG_CHANNEL_ID || 'ineswangelogs';
+    if (env.LOG_CHANNEL_ID) {
+      botSettings.logChannel = env.LOG_CHANNEL_ID;
+    }
     
     if (url.pathname === '/') {
       return new Response('Bot is running!', {
@@ -172,7 +172,6 @@ export default {
 function getText(category, key, replacements = {}) {
   let text = textSystem[category]?.[key] || key;
   
-  // استبدال المتغيرات
   for (const [placeholder, value] of Object.entries(replacements)) {
     text = text.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), value);
   }
@@ -268,7 +267,7 @@ async function sendSubscriptionMessage(chatId, token) {
   const groupsList = mandatorySubscription.groups.map(g => `• ${g}`).join('\n');
   const allSubs = [channelsList, groupsList].filter(s => s).join('\n');
   
-  const message = getUserText('subscription_required', { channels: allSubs });
+  const message = getUserText('subscription_required', { channels: allSubs || 'لا يوجد' });
   await sendMessage(chatId, message, token);
 }
 
@@ -455,6 +454,17 @@ async function showAdminMainMenu(chatId, token) {
 }
 
 async function handleAdminActions(chatId, text, token) {
+  // ===== معالجة نصوص المستخدم والأدمن =====
+  if (text === '👤 نصوص المستخدم') {
+    await showTextList(chatId, 'user', token);
+    return;
+  }
+
+  if (text === '👤 نصوص الأدمن') {
+    await showTextList(chatId, 'admin', token);
+    return;
+  }
+
   switch(text) {
     case '➕ إضافة محتوى':
       await showAddContentMenu(chatId, token);
@@ -527,10 +537,16 @@ async function showTextList(chatId, category, token) {
   let message = getAdminText('text_list');
   const buttons = [];
   
+  let count = 0;
   for (const [key, value] of Object.entries(texts)) {
+    if (count >= 20) {
+      message += `\n... و${Object.keys(texts).length - count} نصوص أخرى`;
+      break;
+    }
     const shortValue = value.length > 30 ? value.substring(0, 30) + '...' : value;
     message += `• ${key}: ${shortValue}\n`;
     buttons.push([{ text: `✏️ ${key}`, callback_data: `edit_text_${category}_${key}` }]);
+    count++;
   }
   
   buttons.push([{ text: getAdminText('back'), callback_data: 'admin_back' }]);
@@ -688,6 +704,150 @@ async function handleAdminSubActions(chatId, text, token) {
         }
       );
     }
+    return;
+  }
+
+  // ===== تعديل المحتوى =====
+  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_new_title') {
+    adminState.tempData.newTitle = text;
+    adminState.step = 'waiting_new_content';
+    
+    await sendMessage(chatId, 
+      getAdminText('edit_content_prompt'),
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [[getAdminText('cancel')]], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_new_content') {
+    const contentId = adminState.tempData.contentId;
+    const item = contentSystem.items[contentId];
+    
+    if (item) {
+      item.title = adminState.tempData.newTitle;
+      item.content = text;
+      item.date = new Date().toLocaleString('ar-EG');
+      
+      await sendMessage(chatId, getAdminText('content_edited', { id: contentId }), token);
+      adminState.currentAction = null;
+      adminState.step = null;
+      adminState.tempData = {};
+      await showContentManagement(chatId, token);
+    }
+    return;
+  }
+
+  // ===== تعديل النصوص =====
+  if (adminState.currentAction === 'edit_text' && adminState.step === 'waiting_text') {
+    await saveEditedText(chatId, text, token);
+    return;
+  }
+
+  // ===== إدارة الاشتراك الإجباري =====
+  if (text === '➕ إضافة قناة') {
+    adminState.currentAction = 'add_channel';
+    adminState.step = 'waiting_input';
+    await sendMessage(chatId, 
+      getAdminText('add_channel_prompt'),
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [[getAdminText('cancel')]], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (text === '➕ إضافة مجموعة') {
+    adminState.currentAction = 'add_group';
+    adminState.step = 'waiting_input';
+    await sendMessage(chatId, 
+      getAdminText('add_group_prompt'),
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [[getAdminText('cancel')]], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (text === '🔄 تفعيل/تعطيل') {
+    mandatorySubscription.enabled = !mandatorySubscription.enabled;
+    const status = mandatorySubscription.enabled ? 'تفعيل' : 'تعطيل';
+    await sendMessage(chatId, 
+      getAdminText('subscription_toggled', { status }),
+      token
+    );
+    await showSubscriptionManagement(chatId, token);
+    return;
+  }
+
+  if (text === '🗑️ حذف قناة' || text === '🗑️ حذف مجموعة') {
+    await showDeleteSubscriptionMenu(chatId, token);
+    return;
+  }
+
+  // ===== معالجة إضافة قناة/مجموعة =====
+  if (adminState.currentAction === 'add_channel' && adminState.step === 'waiting_input') {
+    if (!mandatorySubscription.channels.includes(text)) {
+      mandatorySubscription.channels.push(text);
+      await sendMessage(chatId, getAdminText('channel_added', { id: text }), token);
+    } else {
+      await sendMessage(chatId, getAdminText('channel_exists', { id: text }), token);
+    }
+    adminState.currentAction = null;
+    adminState.step = null;
+    await showSubscriptionManagement(chatId, token);
+    return;
+  }
+
+  if (adminState.currentAction === 'add_group' && adminState.step === 'waiting_input') {
+    if (!mandatorySubscription.groups.includes(text)) {
+      mandatorySubscription.groups.push(text);
+      await sendMessage(chatId, getAdminText('group_added', { id: text }), token);
+    } else {
+      await sendMessage(chatId, getAdminText('group_exists', { id: text }), token);
+    }
+    adminState.currentAction = null;
+    adminState.step = null;
+    await showSubscriptionManagement(chatId, token);
+    return;
+  }
+
+  // ===== إعدادات البوت =====
+  if (text === '✏️ تعديل نص عن البوت') {
+    adminState.currentAction = 'edit_about';
+    adminState.step = 'waiting_input';
+    await sendMessage(chatId, 
+      getAdminText('edit_about_prompt', { about: botSettings.aboutText }),
+      token,
+      { 
+        reply_markup: { 
+          keyboard: [[getAdminText('cancel')]], 
+          resize_keyboard: true 
+        }
+      }
+    );
+    return;
+  }
+
+  if (adminState.currentAction === 'edit_about' && adminState.step === 'waiting_input') {
+    botSettings.aboutText = text;
+    await sendMessage(chatId, getAdminText('about_updated'), token);
+    adminState.currentAction = null;
+    adminState.step = null;
+    await showBotSettings(chatId, token);
     return;
   }
 
@@ -1102,6 +1262,28 @@ async function showSubscriptionManagement(chatId, token) {
   });
 }
 
+async function showDeleteSubscriptionMenu(chatId, token) {
+  const allSubs = [
+    ...mandatorySubscription.channels.map(c => ({ type: 'قناة', id: c })),
+    ...mandatorySubscription.groups.map(g => ({ type: 'مجموعة', id: g }))
+  ];
+
+  if (allSubs.length === 0) {
+    await sendMessage(chatId, getAdminText('no_subscriptions'), token);
+    await showSubscriptionManagement(chatId, token);
+    return;
+  }
+
+  const buttons = allSubs.map(sub => [
+    { text: `🗑️ ${sub.type}: ${sub.id}`, callback_data: `delete_sub_${sub.type}_${sub.id}` }
+  ]);
+  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_subscription_back' }]);
+
+  await sendMessage(chatId, getAdminText('delete_sub_prompt'), token, {
+    reply_markup: { inline_keyboard: buttons }
+  });
+}
+
 // ====================================================================
 // ========== دوال إعدادات البوت ==========
 // ====================================================================
@@ -1163,6 +1345,11 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     return;
   }
 
+  if (data === 'admin_subscription_back') {
+    await showSubscriptionManagement(chatId, token);
+    return;
+  }
+
   if (data === 'show_pending') {
     await showPendingRequests(chatId, token);
     return;
@@ -1184,17 +1371,6 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     const category = parts[2];
     const key = parts.slice(3).join('_');
     await handleEditText(chatId, category, key, token);
-    return;
-  }
-
-  // ===== إدارة النصوص - عرض القوائم =====
-  if (data === 'show_user_texts') {
-    await showTextList(chatId, 'user', token);
-    return;
-  }
-
-  if (data === 'show_admin_texts') {
-    await showTextList(chatId, 'admin', token);
     return;
   }
 
@@ -1564,40 +1740,3 @@ async function sendDocument(chatId, fileId, caption, token) {
     await sendMessage(chatId, getUserText('document_error'), token);
   }
 }
-
-// ====================================================================
-// ========== دوال إدارة النصوص (الكولباك) ==========
-// ====================================================================
-
-// إضافة هذه الحالات في handleAdminCallback
-// عندما يختار الأدمن عرض نصوص المستخدم أو الأدمن
-
-// في دالة showTextManagement، أضف الكولباك:
-// 'show_user_texts' و 'show_admin_texts'
-
-// تعديل دالة showTextManagement:
-
-async function showTextManagement(chatId, token) {
-  const message = getAdminText('text_management');
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['👤 نصوص المستخدم', '👤 نصوص الأدمن'],
-        [getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-// تعديل دالة handleAdminActions لإضافة معالجة نصوص المستخدم والأدمن:
-
-// أضف هذه الحالات في switch:
-case '👤 نصوص المستخدم':
-  await showTextList(chatId, 'user', token);
-  break;
-
-case '👤 نصوص الأدمن':
-  await showTextList(chatId, 'admin', token);
-  break;
