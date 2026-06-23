@@ -1,116 +1,11 @@
-// ========== التخزين المؤقت ==========
-const pendingUsers = {};
-const rejectedUsers = {};
-const approvedUsers = {};
-
-// ========== نظام المحتوى ==========
-const contentSystem = {
-  items: {}
-};
-
-// ========== نظام الاشتراك الإجباري ==========
-const mandatorySubscription = {
-  channels: [],
-  groups: [],
-  enabled: false
-};
-
-// ========== نظام النصوص ==========
-const textSystem = {
-  user: {
-    welcome: '🎉 مرحباً بك في البوت!\n\n🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.\n📌 أو استخدم الأزرار أدناه:',
-    search_prompt: 'أرسل رقم المحتوى الذي تريد مشاهدته:',
-    about: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
-    no_content: '❌ لا يوجد محتوى برقم {contentId}\n\nتأكد من الرقم وحاول مرة أخرى:',
-    no_content_search: '❌ لا يوجد محتوى برقم {contentId}\n\n🔍 استخدم زر "البحث عن محتوى"',
-    choose_action: 'اختر الإجراء:',
-    back_to_menu: '🔙 رجوع',
-    search_button: '🔍 البحث عن محتوى',
-    about_button: 'ℹ️ عن البوت',
-    subscription_required: '🔐 للوصول إلى محتوى البوت، يجب عليك الاشتراك في القنوات التالية:\n\n{channels}\n\n✅ بعد الاشتراك، اضغط /start مرة أخرى.',
-    not_approved: '🔐 يجب الموافقة على طلبك أولاً.\nاضغط /start',
-    request_received: '⏳ تم استلام طلبك! جاري التحقق...',
-    request_pending: '⏳ طلبك قيد المراجعة...',
-    request_verified: '🔐 يرجى مشاركة رقم هاتفك أولاً.\nاضغط /start',
-    share_phone: '🔐 للتحقق، شارك رقم هاتفك:',
-    share_phone_button: '📱 مشاركة الرقم',
-    approved: '✅ تمت الموافقة! اضغط /start',
-    rejected: '❌ طلبك مرفوض. للتواصل: @jahab',
-    reapproved: '✅ تم استئناف طلبك! اضغط /start',
-    content_sent: 'اختر الإجراء:',
-    video_error: '⚠️ حدث خطأ في عرض الفيديو',
-    photo_error: '⚠️ حدث خطأ في عرض الصورة',
-    document_error: '⚠️ حدث خطأ في عرض الملف'
-  },
-  admin: {
-    welcome: '👋 مرحباً بك في لوحة التحكم\n\n📊 الإحصائيات:\n• 📋 طلبات جديدة: {pending}\n• 📦 محتوى: {content}\n• 🔗 اشتراكات إجبارية: {subscription}\n\n📌 اختر الإدارة المناسبة:',
-    add_content_title: '➕ إضافة محتوى جديد\n\nاختر نوع المحتوى:',
-    add_content_prompt: 'أدخل عنوان المحتوى (نوع: {type}):',
-    add_content_instruction: '{instruction}\n\n(اضغط "حفظ" عند الانتهاء)',
-    add_content_success: '✅ تم إضافة {type}\nأرسل المزيد أو اضغط "حفظ المحتوى":',
-    content_saved: '✅ تم حفظ المحتوى بنجاح!\n\nالعنوان: {title}\nالنوع: {type}\nالرقم: {contentId}\nعدد العناصر: {count}\n\nرابط المشاركة:\n{shareLink}',
-    no_text: '⚠️ لم يتم إضافة أي نص!',
-    no_media: '⚠️ لم يتم إضافة أي وسائط!',
-    text_added: '✅ تم إضافة النص\nأرسل النص التالي أو اضغط "حفظ المحتوى":',
-    content_management: '📦 إدارة المحتوى\n\n📊 الإحصائيات:\n• 📦 مجموع المحتويات: {total}\n\n🔸 الإجراءات:\n• 📦 عرض الكل\n• ✏️ تعديل محتوى\n• 🗑️ حذف محتوى',
-    no_content_list: '📦 لا يوجد محتوى',
-    content_list: '📦 قائمة المحتويات:\n\n',
-    no_content_delete: '📦 لا يوجد محتوى للحذف',
-    delete_prompt: '🗑️ اختر المحتوى للحذف:',
-    no_content_edit: '📦 لا يوجد محتوى للتعديل',
-    edit_prompt: '✏️ اختر المحتوى للتعديل:',
-    edit_title_prompt: '✏️ تعديل المحتوى رقم {id}\nالعنوان الحالي: {title}\n\nأدخل العنوان الجديد:',
-    edit_content_prompt: 'أدخل المحتوى الجديد:',
-    content_edited: '✅ تم تعديل المحتوى رقم {id}',
-    content_deleted: '✅ تم حذف المحتوى رقم {id}',
-    content_not_found: '⚠️ المحتوى رقم {id} غير موجود',
-    subscription_management: '🔗 إدارة الاشتراك الإجباري\n\n📊 الحالة: {status}\n\n📢 القنوات:\n• {channels}\n\n👥 المجموعات:\n• {groups}\n\nاختر الإجراء:',
-    add_channel_prompt: 'أدخل معرف القناة (مثل: @channel أو -100123456):',
-    add_group_prompt: 'أدخل معرف المجموعة (مثل: -100123456):',
-    channel_added: '✅ تم إضافة القناة {id}',
-    channel_exists: '⚠️ القناة {id} موجودة بالفعل',
-    group_added: '✅ تم إضافة المجموعة {id}',
-    group_exists: '⚠️ المجموعة {id} موجودة بالفعل',
-    subscription_toggled: '✅ تم {status} الاشتراك الإجباري',
-    no_subscriptions: '⚠️ لا يوجد اشتراكات للحذف',
-    delete_sub_prompt: '🗑️ اختر الاشتراك للحذف:',
-    sub_deleted: '✅ تم حذف {type} {id}',
-    bot_settings: '⚙️ إعدادات البوت\n\n📝 نص "عن البوت":\n{about}\n\n📢 قناة التسجيل: {logChannel}\n\nالإجراءات:',
-    edit_about_prompt: 'أدخل النص الجديد لـ "عن البوت":\n\nالنص الحالي:\n{about}',
-    about_updated: '✅ تم تحديث نص "عن البوت"',
-    statistics: '📊 الإحصائيات العامة:\n\n👥 المستخدمين:\n• ✅ معتمدين: {approved}\n• ⏳ معلق: {pending}\n• ❌ مرفوض: {rejected}\n\n📦 المحتوى:\n• 📦 مجموع: {total}\n• 🖼️ صور: {images}\n• 🎬 فيديو: {videos}\n• 📝 نصوص: {texts}\n\n🔗 الاشتراك الإجباري:\n• 📢 قنوات: {channels}\n• 👥 مجموعات: {groups}\n• 📌 الحالة: {subStatus}\n\n📢 قناة التسجيل: {logChannel}\n\n⏱️ آخر تحديث: {time}',
-    back: '🔙 العودة',
-    cancel: '🔙 إلغاء',
-    unknown: '⚠️ خيار غير معروف. استخدم الأزرار.',
-    requests_management: '📋 إدارة الطلبات\n\n📌 المعلقة: {pending}\n❌ المرفوضة: {rejected}\n\nاختر القائمة:',
-    pending_list: '📋 الطلبات المعلقة:\n\n',
-    rejected_list: '❌ المرفوضين:\n\n',
-    approved_list: '✅ المعتمدين:\n\n',
-    no_pending: '📋 لا توجد طلبات معلقة',
-    no_rejected: '❌ لا يوجد مرفوضين',
-    no_approved: '✅ لا يوجد معتمدين',
-    approved_user: '✅ تم القبول',
-    rejected_user: '❌ تم الرفض',
-    reapproved_user: '✅ تم إعادة الموافقة',
-    user_details: '📋 تفاصيل المستخدم:\n👤 الاسم: {name}\n🆔 اليوزرنيم: @{username}\n📱 رقم الهاتف: {phone}\n🕐 تاريخ الطلب: {time}\n📌 الحالة: {status}',
-    user_deleted: '🗑️ تم حذف المستخدم',
-    text_management: '📝 إدارة النصوص\n\nاختر القسم:',
-    user_texts: '👤 نصوص المستخدم',
-    admin_texts: '👤 نصوص الأدمن',
-    text_list: '📋 قائمة النصوص:\n\n',
-    select_text: '✏️ اختر النص لتعديله:',
-    edit_text_prompt: '✏️ تعديل النص: {key}\n\nالنص الحالي:\n{current}\n\nأدخل النص الجديد:',
-    text_updated: '✅ تم تحديث النص: {key}',
-    text_not_found: '⚠️ النص غير موجود',
-    no_texts: '📋 لا توجد نصوص'
-  }
-};
-
-// ========== إعدادات البوت ==========
-let botSettings = {
-  aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
-  logChannel: 'ineswangelogs'
-};
+// ========== التخزين المؤقت (للذاكرة) ==========
+let pendingUsers = {};
+let rejectedUsers = {};
+let approvedUsers = {};
+let contentSystem = { items: {} };
+let mandatorySubscription = { channels: [], groups: [], enabled: false };
+let botSettings = { aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته', logChannel: 'ineswangelogs' };
+let textSystem = {};
 
 // ========== حالة الأدمن ==========
 const adminState = {
@@ -122,13 +17,21 @@ const adminState = {
 // ========== حالة المستخدم ==========
 const userState = {};
 
+// ========== أسماء مفاتيح KV ==========
+const KV_KEYS = {
+  USERS: 'bot_users',
+  CONTENT: 'bot_content',
+  SUBSCRIPTION: 'bot_subscription',
+  SETTINGS: 'bot_settings',
+  TEXTS: 'bot_texts'
+};
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
-    if (env.LOG_CHANNEL_ID) {
-      botSettings.logChannel = env.LOG_CHANNEL_ID;
-    }
+    // ===== تحميل البيانات من KV عند بدء التشغيل =====
+    await loadDataFromKV(env);
     
     if (url.pathname === '/') {
       return new Response('Bot is running!', {
@@ -164,6 +67,202 @@ export default {
     return new Response('Not found', { status: 404 });
   }
 };
+
+// ====================================================================
+// ========== دوال KV ==========
+// ====================================================================
+
+async function loadDataFromKV(env) {
+  try {
+    // تحميل المستخدمين
+    const usersData = await env.KV_NAMESPACE.get(KV_KEYS.USERS, 'json');
+    if (usersData) {
+      pendingUsers = usersData.pending || {};
+      rejectedUsers = usersData.rejected || {};
+      approvedUsers = usersData.approved || {};
+    }
+
+    // تحميل المحتوى
+    const contentData = await env.KV_NAMESPACE.get(KV_KEYS.CONTENT, 'json');
+    if (contentData) {
+      contentSystem.items = contentData.items || {};
+    }
+
+    // تحميل الاشتراك الإجباري
+    const subData = await env.KV_NAMESPACE.get(KV_KEYS.SUBSCRIPTION, 'json');
+    if (subData) {
+      mandatorySubscription = subData;
+    }
+
+    // تحميل الإعدادات
+    const settingsData = await env.KV_NAMESPACE.get(KV_KEYS.SETTINGS, 'json');
+    if (settingsData) {
+      botSettings = settingsData;
+    }
+
+    // تحميل النصوص
+    const textsData = await env.KV_NAMESPACE.get(KV_KEYS.TEXTS, 'json');
+    if (textsData) {
+      textSystem = textsData;
+    } else {
+      // النصوص الافتراضية
+      textSystem = getDefaultTexts();
+      await env.KV_NAMESPACE.put(KV_KEYS.TEXTS, JSON.stringify(textSystem));
+    }
+
+    console.log('✅ Data loaded from KV successfully');
+  } catch (error) {
+    console.error('Error loading data from KV:', error);
+    // إذا فشل التحميل، استخدم النصوص الافتراضية
+    textSystem = getDefaultTexts();
+  }
+}
+
+async function saveUsersToKV(env) {
+  try {
+    const data = { pending: pendingUsers, rejected: rejectedUsers, approved: approvedUsers };
+    await env.KV_NAMESPACE.put(KV_KEYS.USERS, JSON.stringify(data));
+  } catch (error) {
+    console.error('Error saving users to KV:', error);
+  }
+}
+
+async function saveContentToKV(env) {
+  try {
+    // حفظ فقط metadata (بدون ملفات الفيديو)
+    const data = { items: contentSystem.items };
+    await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify(data));
+  } catch (error) {
+    console.error('Error saving content to KV:', error);
+  }
+}
+
+async function saveSubscriptionToKV(env) {
+  try {
+    await env.KV_NAMESPACE.put(KV_KEYS.SUBSCRIPTION, JSON.stringify(mandatorySubscription));
+  } catch (error) {
+    console.error('Error saving subscription to KV:', error);
+  }
+}
+
+async function saveSettingsToKV(env) {
+  try {
+    await env.KV_NAMESPACE.put(KV_KEYS.SETTINGS, JSON.stringify(botSettings));
+  } catch (error) {
+    console.error('Error saving settings to KV:', error);
+  }
+}
+
+async function saveTextsToKV(env) {
+  try {
+    await env.KV_NAMESPACE.put(KV_KEYS.TEXTS, JSON.stringify(textSystem));
+  } catch (error) {
+    console.error('Error saving texts to KV:', error);
+  }
+}
+
+async function saveAllDataToKV(env) {
+  await saveUsersToKV(env);
+  await saveContentToKV(env);
+  await saveSubscriptionToKV(env);
+  await saveSettingsToKV(env);
+  await saveTextsToKV(env);
+}
+
+// ====================================================================
+// ========== النصوص الافتراضية ==========
+// ====================================================================
+
+function getDefaultTexts() {
+  return {
+    user: {
+      welcome: '🎉 مرحباً بك في البوت!\n\n🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.\n📌 أو استخدم الأزرار أدناه:',
+      search_prompt: 'أرسل رقم المحتوى الذي تريد مشاهدته:',
+      about: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
+      no_content: '❌ لا يوجد محتوى برقم {contentId}\n\nتأكد من الرقم وحاول مرة أخرى:',
+      no_content_search: '❌ لا يوجد محتوى برقم {contentId}\n\n🔍 استخدم زر "البحث عن محتوى"',
+      choose_action: 'اختر الإجراء:',
+      back_to_menu: '🔙 رجوع',
+      search_button: '🔍 البحث عن محتوى',
+      about_button: 'ℹ️ عن البوت',
+      subscription_required: '🔐 للوصول إلى محتوى البوت، يجب عليك الاشتراك في القنوات التالية:\n\n{channels}\n\n✅ بعد الاشتراك، اضغط /start مرة أخرى.',
+      not_approved: '🔐 يجب الموافقة على طلبك أولاً.\nاضغط /start',
+      request_received: '⏳ تم استلام طلبك! جاري التحقق...',
+      request_pending: '⏳ طلبك قيد المراجعة...',
+      request_verified: '🔐 يرجى مشاركة رقم هاتفك أولاً.\nاضغط /start',
+      share_phone: '🔐 للتحقق، شارك رقم هاتفك:',
+      share_phone_button: '📱 مشاركة الرقم',
+      approved: '✅ تمت الموافقة! اضغط /start',
+      rejected: '❌ طلبك مرفوض. للتواصل: @jahab',
+      reapproved: '✅ تم استئناف طلبك! اضغط /start',
+      video_error: '⚠️ حدث خطأ في عرض الفيديو',
+      photo_error: '⚠️ حدث خطأ في عرض الصورة',
+      document_error: '⚠️ حدث خطأ في عرض الملف'
+    },
+    admin: {
+      welcome: '👋 مرحباً بك في لوحة التحكم\n\n📊 الإحصائيات:\n• 📋 طلبات جديدة: {pending}\n• 📦 محتوى: {content}\n• 🔗 اشتراكات إجبارية: {subscription}\n\n📌 اختر الإدارة المناسبة:',
+      add_content_title: '➕ إضافة محتوى جديد\n\nاختر نوع المحتوى:',
+      add_content_prompt: 'أدخل عنوان المحتوى (نوع: {type}):',
+      add_content_instruction: '{instruction}\n\n(اضغط "حفظ" عند الانتهاء)',
+      add_content_success: '✅ تم إضافة {type}\nأرسل المزيد أو اضغط "حفظ المحتوى":',
+      content_saved: '✅ تم حفظ المحتوى بنجاح!\n\nالعنوان: {title}\nالنوع: {type}\nالرقم: {contentId}\nعدد العناصر: {count}\n\nرابط المشاركة:\n{shareLink}',
+      no_text: '⚠️ لم يتم إضافة أي نص!',
+      no_media: '⚠️ لم يتم إضافة أي وسائط!',
+      text_added: '✅ تم إضافة النص\nأرسل النص التالي أو اضغط "حفظ المحتوى":',
+      content_management: '📦 إدارة المحتوى\n\n📊 الإحصائيات:\n• 📦 مجموع المحتويات: {total}\n\n🔸 الإجراءات:\n• 📦 عرض الكل\n• ✏️ تعديل محتوى\n• 🗑️ حذف محتوى',
+      no_content_list: '📦 لا يوجد محتوى',
+      content_list: '📦 قائمة المحتويات:\n\n',
+      no_content_delete: '📦 لا يوجد محتوى للحذف',
+      delete_prompt: '🗑️ اختر المحتوى للحذف:',
+      no_content_edit: '📦 لا يوجد محتوى للتعديل',
+      edit_prompt: '✏️ اختر المحتوى للتعديل:',
+      edit_title_prompt: '✏️ تعديل المحتوى رقم {id}\nالعنوان الحالي: {title}\n\nأدخل العنوان الجديد:',
+      edit_content_prompt: 'أدخل المحتوى الجديد:',
+      content_edited: '✅ تم تعديل المحتوى رقم {id}',
+      content_deleted: '✅ تم حذف المحتوى رقم {id}',
+      content_not_found: '⚠️ المحتوى رقم {id} غير موجود',
+      subscription_management: '🔗 إدارة الاشتراك الإجباري\n\n📊 الحالة: {status}\n\n📢 القنوات:\n• {channels}\n\n👥 المجموعات:\n• {groups}\n\nاختر الإجراء:',
+      add_channel_prompt: 'أدخل معرف القناة (مثل: @channel أو -100123456):',
+      add_group_prompt: 'أدخل معرف المجموعة (مثل: -100123456):',
+      channel_added: '✅ تم إضافة القناة {id}',
+      channel_exists: '⚠️ القناة {id} موجودة بالفعل',
+      group_added: '✅ تم إضافة المجموعة {id}',
+      group_exists: '⚠️ المجموعة {id} موجودة بالفعل',
+      subscription_toggled: '✅ تم {status} الاشتراك الإجباري',
+      no_subscriptions: '⚠️ لا يوجد اشتراكات للحذف',
+      delete_sub_prompt: '🗑️ اختر الاشتراك للحذف:',
+      sub_deleted: '✅ تم حذف {type} {id}',
+      bot_settings: '⚙️ إعدادات البوت\n\n📝 نص "عن البوت":\n{about}\n\n📢 قناة التسجيل: {logChannel}\n\nالإجراءات:',
+      edit_about_prompt: 'أدخل النص الجديد لـ "عن البوت":\n\nالنص الحالي:\n{about}',
+      about_updated: '✅ تم تحديث نص "عن البوت"',
+      statistics: '📊 الإحصائيات العامة:\n\n👥 المستخدمين:\n• ✅ معتمدين: {approved}\n• ⏳ معلق: {pending}\n• ❌ مرفوض: {rejected}\n\n📦 المحتوى:\n• 📦 مجموع: {total}\n• 🖼️ صور: {images}\n• 🎬 فيديو: {videos}\n• 📝 نصوص: {texts}\n\n🔗 الاشتراك الإجباري:\n• 📢 قنوات: {channels}\n• 👥 مجموعات: {groups}\n• 📌 الحالة: {subStatus}\n\n📢 قناة التسجيل: {logChannel}\n\n⏱️ آخر تحديث: {time}',
+      back: '🔙 العودة',
+      cancel: '🔙 إلغاء',
+      unknown: '⚠️ خيار غير معروف. استخدم الأزرار.',
+      requests_management: '📋 إدارة الطلبات\n\n📌 المعلقة: {pending}\n❌ المرفوضة: {rejected}\n\nاختر القائمة:',
+      pending_list: '📋 الطلبات المعلقة:\n\n',
+      rejected_list: '❌ المرفوضين:\n\n',
+      approved_list: '✅ المعتمدين:\n\n',
+      no_pending: '📋 لا توجد طلبات معلقة',
+      no_rejected: '❌ لا يوجد مرفوضين',
+      no_approved: '✅ لا يوجد معتمدين',
+      approved_user: '✅ تم القبول',
+      rejected_user: '❌ تم الرفض',
+      reapproved_user: '✅ تم إعادة الموافقة',
+      user_details: '📋 تفاصيل المستخدم:\n👤 الاسم: {name}\n🆔 اليوزرنيم: @{username}\n📱 رقم الهاتف: {phone}\n🕐 تاريخ الطلب: {time}\n📌 الحالة: {status}',
+      user_deleted: '🗑️ تم حذف المستخدم',
+      text_management: '📝 إدارة النصوص\n\nاختر القسم:',
+      user_texts: '👤 نصوص المستخدم',
+      admin_texts: '👤 نصوص الأدمن',
+      text_list: '📋 قائمة النصوص:\n\n',
+      select_text: '✏️ اختر النص لتعديله:',
+      edit_text_prompt: '✏️ تعديل النص: {key}\n\nالنص الحالي:\n{current}\n\nأدخل النص الجديد:',
+      text_updated: '✅ تم تحديث النص: {key}',
+      text_not_found: '⚠️ النص غير موجود',
+      no_texts: '📋 لا توجد نصوص'
+    }
+  };
+}
 
 // ====================================================================
 // ========== دوال النصوص ==========
@@ -271,6 +370,10 @@ async function sendSubscriptionMessage(chatId, token) {
   await sendMessage(chatId, message, token);
 }
 
+// ====================================================================
+// ========== معالجة التحديثات ==========
+// ====================================================================
+
 async function handleTelegramUpdate(update, env) {
   const token = env.BOT_TOKEN;
   const ADMIN_ID = env.ADMIN_ID;
@@ -293,7 +396,7 @@ async function handleTelegramUpdate(update, env) {
           await showAdminMainMenu(chatId, token);
           return;
         }
-        await handleAdminActions(chatId, text, token);
+        await handleAdminActions(chatId, text, token, env);
         return;
       }
 
@@ -382,6 +485,7 @@ async function handleTelegramUpdate(update, env) {
         };
 
         pendingUsers[userId] = userData;
+        await saveUsersToKV(env);
 
         await sendMessage(chatId, getUserText('request_received'), token, {
           reply_markup: { remove_keyboard: true }
@@ -415,7 +519,7 @@ async function handleTelegramUpdate(update, env) {
       const messageId = query.message.message_id;
 
       if (userId.toString() === ADMIN_ID) {
-        await handleAdminCallback(data, chatId, messageId, token);
+        await handleAdminCallback(data, chatId, messageId, token, env);
         await answerCallbackQuery(query.id, '✅ تم', token);
         return;
       }
@@ -453,7 +557,7 @@ async function showAdminMainMenu(chatId, token) {
   });
 }
 
-async function handleAdminActions(chatId, text, token) {
+async function handleAdminActions(chatId, text, token, env) {
   // ===== معالجة نصوص المستخدم والأدمن =====
   if (text === '👤 نصوص المستخدم') {
     await showTextList(chatId, 'user', token);
@@ -504,7 +608,7 @@ async function handleAdminActions(chatId, text, token) {
       break;
       
     default:
-      await handleAdminSubActions(chatId, text, token);
+      await handleAdminSubActions(chatId, text, token, env);
       break;
   }
 }
@@ -580,11 +684,12 @@ async function handleEditText(chatId, category, key, token) {
   });
 }
 
-async function saveEditedText(chatId, text, token) {
+async function saveEditedText(chatId, text, token, env) {
   const { category, key } = adminState.tempData;
   
   if (textSystem[category]) {
     textSystem[category][key] = text;
+    await saveTextsToKV(env);
   }
 
   await sendMessage(chatId, getAdminText('text_updated', { key }), token);
@@ -613,7 +718,7 @@ async function showAddContentMenu(chatId, token) {
   });
 }
 
-async function handleAdminSubActions(chatId, text, token) {
+async function handleAdminSubActions(chatId, text, token, env) {
   // ===== اختيار نوع المحتوى =====
   if (text === '🖼️ صورة' || text === '🎬 فيديو' || text === '📝 نص') {
     const typeMap = {
@@ -669,7 +774,7 @@ async function handleAdminSubActions(chatId, text, token) {
 
   // ===== حفظ المحتوى =====
   if (text === '✅ حفظ المحتوى' && adminState.currentAction === 'add_content') {
-    await saveSingleContent(chatId, token);
+    await saveSingleContent(chatId, token, env);
     return;
   }
 
@@ -733,6 +838,7 @@ async function handleAdminSubActions(chatId, text, token) {
       item.title = adminState.tempData.newTitle;
       item.content = text;
       item.date = new Date().toLocaleString('ar-EG');
+      await saveContentToKV(env);
       
       await sendMessage(chatId, getAdminText('content_edited', { id: contentId }), token);
       adminState.currentAction = null;
@@ -745,7 +851,7 @@ async function handleAdminSubActions(chatId, text, token) {
 
   // ===== تعديل النصوص =====
   if (adminState.currentAction === 'edit_text' && adminState.step === 'waiting_text') {
-    await saveEditedText(chatId, text, token);
+    await saveEditedText(chatId, text, token, env);
     return;
   }
 
@@ -785,6 +891,7 @@ async function handleAdminSubActions(chatId, text, token) {
   if (text === '🔄 تفعيل/تعطيل') {
     mandatorySubscription.enabled = !mandatorySubscription.enabled;
     const status = mandatorySubscription.enabled ? 'تفعيل' : 'تعطيل';
+    await saveSubscriptionToKV(env);
     await sendMessage(chatId, 
       getAdminText('subscription_toggled', { status }),
       token
@@ -802,6 +909,7 @@ async function handleAdminSubActions(chatId, text, token) {
   if (adminState.currentAction === 'add_channel' && adminState.step === 'waiting_input') {
     if (!mandatorySubscription.channels.includes(text)) {
       mandatorySubscription.channels.push(text);
+      await saveSubscriptionToKV(env);
       await sendMessage(chatId, getAdminText('channel_added', { id: text }), token);
     } else {
       await sendMessage(chatId, getAdminText('channel_exists', { id: text }), token);
@@ -815,6 +923,7 @@ async function handleAdminSubActions(chatId, text, token) {
   if (adminState.currentAction === 'add_group' && adminState.step === 'waiting_input') {
     if (!mandatorySubscription.groups.includes(text)) {
       mandatorySubscription.groups.push(text);
+      await saveSubscriptionToKV(env);
       await sendMessage(chatId, getAdminText('group_added', { id: text }), token);
     } else {
       await sendMessage(chatId, getAdminText('group_exists', { id: text }), token);
@@ -844,6 +953,7 @@ async function handleAdminSubActions(chatId, text, token) {
 
   if (adminState.currentAction === 'edit_about' && adminState.step === 'waiting_input') {
     botSettings.aboutText = text;
+    await saveSettingsToKV(env);
     await sendMessage(chatId, getAdminText('about_updated'), token);
     adminState.currentAction = null;
     adminState.step = null;
@@ -910,7 +1020,7 @@ async function handleAdminMedia(chatId, msg, token) {
 
 // ========== حفظ محتوى واحد ==========
 
-async function saveSingleContent(chatId, token) {
+async function saveSingleContent(chatId, token, env) {
   const title = adminState.tempData.title;
   const type = adminState.tempData.type;
   const mediaItems = adminState.tempData.mediaItems || [];
@@ -949,6 +1059,8 @@ async function saveSingleContent(chatId, token) {
     mediaItems: mediaItems.length > 1 ? mediaItems : null,
     date: new Date().toLocaleString('ar-EG')
   };
+
+  await saveContentToKV(env);
 
   const botUsername = (await getBotInfo(token)).username;
   const shareLink = `https://t.me/${botUsername}?start=share_${contentId}`;
@@ -1334,7 +1446,7 @@ async function showStatistics(chatId, token) {
 // ========== معالجة الكولباك ==========
 // ====================================================================
 
-async function handleAdminCallback(data, chatId, messageId, token) {
+async function handleAdminCallback(data, chatId, messageId, token, env) {
   if (data === 'admin_back') {
     await showAdminMainMenu(chatId, token);
     return;
@@ -1384,12 +1496,14 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       const index = mandatorySubscription.channels.indexOf(id);
       if (index !== -1) {
         mandatorySubscription.channels.splice(index, 1);
+        await saveSubscriptionToKV(env);
         await sendMessage(chatId, getAdminText('sub_deleted', { type: 'القناة', id }), token);
       }
     } else if (type === 'مجموعة') {
       const index = mandatorySubscription.groups.indexOf(id);
       if (index !== -1) {
         mandatorySubscription.groups.splice(index, 1);
+        await saveSubscriptionToKV(env);
         await sendMessage(chatId, getAdminText('sub_deleted', { type: 'المجموعة', id }), token);
       }
     }
@@ -1403,6 +1517,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     
     if (contentSystem.items[contentId]) {
       delete contentSystem.items[contentId];
+      await saveContentToKV(env);
       await sendMessage(chatId, getAdminText('content_deleted', { id: contentId }), token);
       await showContentManagement(chatId, token);
     } else {
@@ -1445,6 +1560,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       approvedUsers[targetId] = pendingUsers[targetId];
       delete pendingUsers[targetId];
       delete rejectedUsers[targetId];
+      await saveUsersToKV(env);
       
       const username = pendingUsers[targetId]?.username || null;
       await logUserAction(targetId, username, '✅ موافقة', 'تمت الموافقة على طلب الانضمام', token);
@@ -1464,6 +1580,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       rejectedUsers[targetId] = pendingUsers[targetId];
       delete pendingUsers[targetId];
       delete approvedUsers[targetId];
+      await saveUsersToKV(env);
       
       const username = pendingUsers[targetId]?.username || null;
       await logUserAction(targetId, username, '❌ رفض', 'تم رفض طلب الانضمام', token);
@@ -1483,6 +1600,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
       approvedUsers[targetId] = rejectedUsers[targetId];
       delete rejectedUsers[targetId];
       delete pendingUsers[targetId];
+      await saveUsersToKV(env);
       
       const username = rejectedUsers[targetId]?.username || null;
       await logUserAction(targetId, username, '✅ إعادة موافقة', 'تم إعادة الموافقة على الطلب', token);
@@ -1521,6 +1639,7 @@ async function handleAdminCallback(data, chatId, messageId, token) {
     const targetId = data.split('_')[2];
     if (rejectedUsers[targetId]) {
       delete rejectedUsers[targetId];
+      await saveUsersToKV(env);
       await sendMessage(chatId, getAdminText('user_deleted'), token);
       await showRequestsManagement(chatId, token);
     }
