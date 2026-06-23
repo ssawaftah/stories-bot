@@ -6,7 +6,7 @@ let contentSystem = { items: {} };
 let mandatorySubscription = { channels: [], groups: [], enabled: false };
 let botSettings = { 
   aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته', 
-  logChannel: 'ineswangelogs' 
+  logChannel: 'ineswangelogs'  // سيتم تحديثه من env
 };
 let textSystem = {};
 
@@ -32,6 +32,10 @@ const KV_KEYS = {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    
+    // تحديث إعدادات البوت من البيئة
+    botSettings.logChannel = env.LOG_CHANNEL_ID || 'ineswangelogs';
+    console.log('📢 قناة التسجيل:', botSettings.logChannel);
     
     // ===== تحميل البيانات من KV عند بدء التشغيل =====
     await loadDataFromKV(env);
@@ -100,7 +104,7 @@ async function loadDataFromKV(env) {
     // تحميل الإعدادات
     const settingsData = await env.KV_NAMESPACE.get(KV_KEYS.SETTINGS, 'json');
     if (settingsData) {
-      botSettings = settingsData;
+      botSettings = { ...botSettings, ...settingsData };
     }
 
     // تحميل النصوص
@@ -277,11 +281,9 @@ function getDefaultTexts() {
 
 function getText(category, key, replacements = {}) {
   let text = textSystem[category]?.[key] || key;
-  
   for (const [placeholder, value] of Object.entries(replacements)) {
     text = text.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), value);
   }
-  
   return text;
 }
 
@@ -294,7 +296,7 @@ function getAdminText(key, replacements = {}) {
 }
 
 // ====================================================================
-// ========== دوال التسجيل (قناة الأحداث) ==========
+// ========== دوال التسجيل (قناة الأحداث) - مُحسّنة ==========
 // ====================================================================
 
 async function sendLog(message, token) {
@@ -304,13 +306,31 @@ async function sendLog(message, token) {
     return;
   }
   
+  console.log(`📤 محاولة إرسال سجل إلى: ${logChannel}`);
+  
   try {
-    console.log(`📤 إرسال سجل إلى: ${logChannel}`);
     const result = await sendMessage(logChannel, message, token);
     if (result && result.ok) {
       console.log('✅ تم إرسال السجل بنجاح');
     } else {
       console.log('❌ فشل إرسال السجل:', result);
+      // محاولة بديلة
+      try {
+        const url = `https://api.telegram.org/bot${token}/sendMessage`;
+        const payload = {
+          chat_id: logChannel,
+          text: message
+        };
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        console.log('محاولة بديلة:', data);
+      } catch (e) {
+        console.error('فشل المحاولة البديلة:', e);
+      }
     }
   } catch (error) {
     console.error('❌ خطأ في إرسال السجل:', error);
@@ -331,6 +351,7 @@ async function logUserAction(userId, username, action, details, token) {
 🕐 الوقت: ${timestamp}
 ─────────────────`;
 
+  console.log('📝 تسجيل إجراء:', action, 'للمستخدم:', userId);
   await sendLog(logMessage, token);
 }
 
@@ -355,7 +376,6 @@ async function exportAllData(chatId, token) {
 
   const jsonData = JSON.stringify(exportData, null, 2);
   
-  // تقسيم البيانات إذا كانت كبيرة جداً
   if (jsonData.length > 4000) {
     const parts = jsonData.match(/[\s\S]{1,4000}/g) || [];
     await sendMessage(chatId, getAdminText('export_success', {
@@ -380,30 +400,24 @@ async function importAllData(chatId, text, token, env) {
   try {
     const data = JSON.parse(text);
     
-    // التحقق من صحة البيانات
     if (!data.users || !data.content || !data.subscription || !data.settings || !data.texts) {
       throw new Error('بيانات غير مكتملة');
     }
 
-    // استيراد المستخدمين
     pendingUsers = data.users.pending || {};
     rejectedUsers = data.users.rejected || {};
     approvedUsers = data.users.approved || {};
     await saveUsersToKV(env);
 
-    // استيراد المحتوى
     contentSystem.items = data.content || {};
     await saveContentToKV(env);
 
-    // استيراد الاشتراك الإجباري
     mandatorySubscription = data.subscription || { channels: [], groups: [], enabled: false };
     await saveSubscriptionToKV(env);
 
-    // استيراد الإعدادات
     botSettings = data.settings || botSettings;
     await saveSettingsToKV(env);
 
-    // استيراد النصوص
     textSystem = data.texts || getDefaultTexts();
     await saveTextsToKV(env);
 
@@ -596,7 +610,6 @@ async function handleTelegramUpdate(update, env) {
         const adminMsg = `📢 طلب انضمام جديد!\n👤 ${userData.name}\n🆔 @${userData.username}\n📱 ${userData.phone}`;
         await sendMessage(ADMIN_ID, adminMsg, token);
         
-        // تسجيل في قناة الأحداث
         await logUserAction(userId, userData.username, '📋 طلب انضمام', `الاسم: ${userData.name}`, token);
         return;
       }
@@ -656,7 +669,7 @@ async function showAdminMainMenu(chatId, token) {
         ['📦 إدارة المحتوى', '🔗 الاشتراك الإجباري'],
         ['📝 إدارة النصوص', '⚙️ إعدادات البوت'],
         ['🔄 تصدير/استيراد', '📊 الإحصائيات'],
-        [getAdminText('back')]
+        ['📢 اختبار القناة', getAdminText('back')]
       ],
       resize_keyboard: true
     }
@@ -664,6 +677,13 @@ async function showAdminMainMenu(chatId, token) {
 }
 
 async function handleAdminActions(chatId, text, token, env) {
+  // ===== اختبار قناة الأحداث =====
+  if (text === '📢 اختبار القناة') {
+    await sendLog('🧪 هذا اختبار لقناة الأحداث! 🧪\n\n✅ إذا رأيت هذه الرسالة، فإن القناة تعمل بشكل صحيح.', token);
+    await sendMessage(chatId, '✅ تم إرسال اختبار إلى قناة الأحداث', token);
+    return;
+  }
+
   // ===== معالجة نصوص المستخدم والأدمن =====
   if (text === '👤 نصوص المستخدم') {
     await showTextList(chatId, 'user', token);
@@ -1922,14 +1942,20 @@ async function sendMessage(chatId, text, token, options = {}) {
   const payload = { chat_id: chatId, text: text, parse_mode: 'HTML', ...options };
 
   try {
+    console.log(`📤 إرسال رسالة إلى: ${chatId}`);
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    return await response.json();
+    const data = await response.json();
+    console.log('📥 نتيجة الإرسال:', data.ok ? '✅ نجاح' : '❌ فشل');
+    if (!data.ok) {
+      console.log('❌ سبب الفشل:', data.description);
+    }
+    return data;
   } catch (error) {
-    console.error('Error sending message:', error);
+    console.error('❌ خطأ في إرسال الرسالة:', error);
     return { ok: false, error: error.message };
   }
 }
