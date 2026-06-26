@@ -2,8 +2,6 @@
 // ========== بوت تيليجرام ==========
 // ====================================================================
 
-import { sendLog, setLogChannel, setLogEnabled, isLogEnabled } from './modules/logger.js';
-
 let data = {
   settings: {
     botActive: true,
@@ -63,11 +61,7 @@ async function loadData(env) {
     if (protection) data.protection = protection;
     
     const notifications = await env.KV_NAMESPACE.get(KV_KEYS.NOTIFICATIONS, 'json');
-    if (notifications) {
-      data.notifications = notifications;
-      setLogChannel(notifications.channelId);
-      setLogEnabled(notifications.enabled);
-    }
+    if (notifications) data.notifications = notifications;
     
     const welcome = await env.KV_NAMESPACE.get(KV_KEYS.WELCOME, 'json');
     if (welcome) data.welcome = welcome;
@@ -109,8 +103,18 @@ async function saveData(env) {
 
 async function sendMessage(chatId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
-  const payload = { chat_id: chatId, text: text, parse_mode: 'Markdown' };
-  if (extra) Object.assign(payload, extra);
+  const payload = { 
+    chat_id: chatId, 
+    text: text, 
+    parse_mode: 'Markdown',
+    reply_markup: { remove_keyboard: true }
+  };
+  if (extra) {
+    if (extra.reply_markup) {
+      payload.reply_markup = extra.reply_markup;
+    }
+    Object.assign(payload, extra);
+  }
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -171,6 +175,54 @@ async function updateBotCommands(token) {
     });
   } catch (e) {
     console.error('Error updating commands:', e);
+  }
+}
+
+// ====================================================================
+// ========== دوال التسجيل ==========
+// ====================================================================
+
+let logChannelId = null;
+let logEnabled = false;
+
+function setLogChannel(channelId) {
+  logChannelId = channelId;
+}
+
+function setLogEnabled(enabled) {
+  logEnabled = enabled;
+}
+
+async function sendLog(userId, username, name, action, details, token) {
+  if (!logEnabled || !logChannelId) return;
+  
+  const now = new Date();
+  const date = now.toLocaleDateString('ar-EG');
+  const time = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  
+  const message = `
+📋 **سجل الإجراءات**
+
+👤 **الاسم:** ${name || 'غير معروف'}
+🆔 **اليوزرنيم:** @${username || 'لا يوجد'}
+🆔 **المعرف:** ${userId}
+
+⚡ **الإجراء:** ${action}
+📝 **التفاصيل:** ${details}
+
+📅 **التاريخ:** ${date}
+🕐 **الوقت:** ${time} (توقيت الأردن)
+─────────────────`;
+
+  try {
+    const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: logChannelId, text: message, parse_mode: 'Markdown' })
+    });
+  } catch (e) {
+    console.error('Log error:', e);
   }
 }
 
@@ -350,14 +402,16 @@ function getUserWelcome(isNewUser) {
   const text = data.welcome.text;
   const buttons = [];
   
-  // زر بدء الاستخدام للمستخدمين الجدد فقط
   if (isNewUser) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
   
   return {
     text: text,
-    keyboard: { inline_keyboard: buttons }
+    keyboard: { 
+      inline_keyboard: buttons,
+      remove_keyboard: true
+    }
   };
 }
 
@@ -370,7 +424,6 @@ export default {
     const url = new URL(request.url);
     await loadData(env);
     
-    // تحديث إعدادات الإشعارات
     setLogChannel(data.notifications.channelId);
     setLogEnabled(data.notifications.enabled);
     
@@ -419,11 +472,9 @@ async function handleUpdate(update, env) {
     
     // زر بدء الاستخدام
     if (cbData === 'start_use') {
-      // تسجيل الإجراء
       const user = data.users[userId] || {};
       await sendLog(userId, user.username, user.name, '▶️ بدء الاستخدام', 'بدأ المستخدم استخدام البوت', token);
       
-      // التحقق من العضوية
       if (data.verification.enabled) {
         await sendMessage(chatId, data.verification.requestMessage, token, {
           reply_markup: {
@@ -435,14 +486,6 @@ async function handleUpdate(update, env) {
       } else {
         await sendMessage(chatId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
       }
-      await answerCallback(q.id, '✅', token);
-      return;
-    }
-    
-    // أزرار المستخدم
-    if (cbData.startsWith('w_')) {
-      const action = cbData.replace('w_', '');
-      await sendMessage(chatId, '🔹 تم الضغط على: ' + action, token);
       await answerCallback(q.id, '✅', token);
       return;
     }
@@ -466,9 +509,9 @@ async function handleUpdate(update, env) {
     const username = msg.from.username || 'لا يوجد';
     const name = msg.from.first_name + ' ' + (msg.from.last_name || '');
     
-    // تسجيل الإجراء (للمستخدمين)
-    if (userId !== ADMIN) {
-      await sendLog(userId, username, name, '📩 رسالة', 'أرسل: ' + (text || 'وسائط'), token);
+    // تسجيل الإجراء للمستخدمين
+    if (userId !== ADMIN && text) {
+      await sendLog(userId, username, name, '📩 رسالة', 'أرسل: ' + text, token);
     }
     
     // ===== الأدمن =====
@@ -666,12 +709,9 @@ async function handleUpdate(update, env) {
     if (msg.contact) {
       const contact = msg.contact;
       
-      // تسجيل الإجراء
       await sendLog(userId, username, name, '📱 مشاركة رقم', 'شارك رقم هاتفه للتحقق', token);
       
-      // التحقق من العضوية
       if (data.verification.enabled) {
-        // إرسال الطلب للقناة
         if (data.verification.channelId) {
           const adminMsg = `
 👤 **طلب تحقق جديد!**
@@ -695,7 +735,6 @@ async function handleUpdate(update, env) {
           await sendMessage(data.verification.channelId, adminMsg, token, { reply_markup: kb });
         }
         
-        // تخزين الطلب pending
         if (!data.verification.pendingUsers) data.verification.pendingUsers = {};
         data.verification.pendingUsers[userId] = {
           name: name,
@@ -712,10 +751,8 @@ async function handleUpdate(update, env) {
     
     // المستخدم الجديد - /start
     if (text === '/start') {
-      // تسجيل الإجراء
       await sendLog(userId, username, name, '🔄 بدء', 'ضغط على /start', token);
       
-      // التحقق من وجود المستخدم
       const isNewUser = !data.users[userId];
       if (isNewUser) {
         data.users[userId] = { name: name, username: username, joined: new Date().toISOString() };
@@ -723,7 +760,10 @@ async function handleUpdate(update, env) {
       }
       
       const welcome = getUserWelcome(isNewUser);
-      await sendMessage(chatId, welcome.text, token, { reply_markup: welcome.keyboard });
+      await sendMessage(chatId, welcome.text, token, { 
+        reply_markup: welcome.keyboard,
+        remove_keyboard: true 
+      });
       return;
     }
     
@@ -917,10 +957,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
       
-      // تحديث رسالة القناة
       await editMessage(chatId, msgId, '✅ **تم قبول المستخدم**\n\n' + user.name, token);
-      
-      // إرسال رسالة نجاح للمستخدم
       await sendMessage(targetId, data.verification.successMessage, token);
       await sendMessage(targetId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
     }
@@ -936,10 +973,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
       
-      // تحديث رسالة القناة
       await editMessage(chatId, msgId, '❌ **تم رفض المستخدم**\n\n' + user.name, token);
-      
-      // إرسال رسالة رفض للمستخدم
       await sendMessage(targetId, data.verification.failMessage, token);
     }
     return;
