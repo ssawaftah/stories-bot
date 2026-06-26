@@ -1,20 +1,62 @@
-// ========== التخزين المؤقت (للذاكرة) ==========
+// ========== التخزين المؤقت ==========
 let pendingUsers = {};
 let rejectedUsers = {};
 let approvedUsers = {};
 let contentSystem = { items: {} };
 let mandatorySubscription = { channels: [], groups: [], enabled: false };
-let botSettings = { 
-  aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته', 
-  logChannel: 'ineswangelogs'  // سيتم تحديثه من env
+
+// ========== إعدادات البوت المتقدمة ==========
+let botSettings = {
+  aboutText: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
+  logChannel: 'ineswangelogs',
+  isActive: true,
+  stopMessage: '⏸️ البوت متوقف حالياً. يرجى المحاولة لاحقاً.',
+  botLink: 'https://t.me/teeeesrydtbot?start=208119acf078c736aedc73397529c7796771993',
+  usersList: [],
+  totalMessages: 0,
+  sessions: 0,
+  stats: {
+    todayUsers: 0,
+    newUsersToday: 0,
+    totalMessages: 0,
+    sessions: 0
+  }
 };
-let textSystem = {};
+
+// ========== نظام التحقق ==========
+let verificationSystem = {
+  enabled: false,
+  type: 'phone', // 'phone', 'math', 'admin'
+  messages: {
+    success: '✅ تم التحقق بنجاح!',
+    request: '🔐 يرجى التحقق من هويتك:',
+    fail: '❌ فشل التحقق. حاول مرة أخرى.'
+  },
+  verifiedUsers: {},
+  mathQuestion: null,
+  mathAnswer: null
+};
+
+// ========== نظام حماية المحتوى ==========
+let contentProtection = {
+  enabled: false,
+  excludeMedia: false,
+  excludeLinks: false,
+  excludeText: false
+};
+
+// ========== نظام الإشعارات ==========
+let notificationSettings = {
+  joinNotification: false,
+  banNotification: false
+};
 
 // ========== حالة الأدمن ==========
 const adminState = {
   currentAction: null,
   step: null,
-  tempData: {}
+  tempData: {},
+  currentMenu: 'main'
 };
 
 // ========== حالة المستخدم ==========
@@ -26,7 +68,11 @@ const KV_KEYS = {
   CONTENT: 'bot_content',
   SUBSCRIPTION: 'bot_subscription',
   SETTINGS: 'bot_settings',
-  TEXTS: 'bot_texts'
+  TEXTS: 'bot_texts',
+  VERIFICATION: 'bot_verification',
+  PROTECTION: 'bot_protection',
+  NOTIFICATIONS: 'bot_notifications',
+  STATS: 'bot_stats'
 };
 
 export default {
@@ -37,8 +83,8 @@ export default {
     botSettings.logChannel = env.LOG_CHANNEL_ID || 'ineswangelogs';
     console.log('📢 قناة التسجيل:', botSettings.logChannel);
     
-    // ===== تحميل البيانات من KV عند بدء التشغيل =====
-    await loadDataFromKV(env);
+    // ===== تحميل البيانات من KV =====
+    await loadAllData(env);
     
     if (url.pathname === '/') {
       return new Response('Bot is running!', {
@@ -76,10 +122,10 @@ export default {
 };
 
 // ====================================================================
-// ========== دوال KV ==========
+// ========== دوال تحميل وحفظ البيانات ==========
 // ====================================================================
 
-async function loadDataFromKV(env) {
+async function loadAllData(env) {
   try {
     // تحميل المستخدمين
     const usersData = await env.KV_NAMESPACE.get(KV_KEYS.USERS, 'json');
@@ -107,233 +153,63 @@ async function loadDataFromKV(env) {
       botSettings = { ...botSettings, ...settingsData };
     }
 
-    // تحميل النصوص
-    const textsData = await env.KV_NAMESPACE.get(KV_KEYS.TEXTS, 'json');
-    if (textsData) {
-      textSystem = textsData;
-    } else {
-      textSystem = getDefaultTexts();
-      await env.KV_NAMESPACE.put(KV_KEYS.TEXTS, JSON.stringify(textSystem));
+    // تحميل التحقق
+    const verData = await env.KV_NAMESPACE.get(KV_KEYS.VERIFICATION, 'json');
+    if (verData) {
+      verificationSystem = verData;
     }
 
-    console.log('✅ Data loaded from KV successfully');
+    // تحميل حماية المحتوى
+    const protData = await env.KV_NAMESPACE.get(KV_KEYS.PROTECTION, 'json');
+    if (protData) {
+      contentProtection = protData;
+    }
+
+    // تحميل الإشعارات
+    const notData = await env.KV_NAMESPACE.get(KV_KEYS.NOTIFICATIONS, 'json');
+    if (notData) {
+      notificationSettings = notData;
+    }
+
+    // تحميل الإحصائيات
+    const statsData = await env.KV_NAMESPACE.get(KV_KEYS.STATS, 'json');
+    if (statsData) {
+      botSettings.stats = statsData;
+    }
+
+    console.log('✅ All data loaded from KV successfully');
   } catch (error) {
     console.error('Error loading data from KV:', error);
-    textSystem = getDefaultTexts();
   }
 }
 
-async function saveUsersToKV(env) {
+async function saveAllData(env) {
   try {
-    const data = { pending: pendingUsers, rejected: rejectedUsers, approved: approvedUsers };
-    await env.KV_NAMESPACE.put(KV_KEYS.USERS, JSON.stringify(data));
-  } catch (error) {
-    console.error('Error saving users to KV:', error);
-  }
-}
-
-async function saveContentToKV(env) {
-  try {
-    const data = { items: contentSystem.items };
-    await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify(data));
-  } catch (error) {
-    console.error('Error saving content to KV:', error);
-  }
-}
-
-async function saveSubscriptionToKV(env) {
-  try {
+    await env.KV_NAMESPACE.put(KV_KEYS.USERS, JSON.stringify({ pending: pendingUsers, rejected: rejectedUsers, approved: approvedUsers }));
+    await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify({ items: contentSystem.items }));
     await env.KV_NAMESPACE.put(KV_KEYS.SUBSCRIPTION, JSON.stringify(mandatorySubscription));
-  } catch (error) {
-    console.error('Error saving subscription to KV:', error);
-  }
-}
-
-async function saveSettingsToKV(env) {
-  try {
     await env.KV_NAMESPACE.put(KV_KEYS.SETTINGS, JSON.stringify(botSettings));
+    await env.KV_NAMESPACE.put(KV_KEYS.VERIFICATION, JSON.stringify(verificationSystem));
+    await env.KV_NAMESPACE.put(KV_KEYS.PROTECTION, JSON.stringify(contentProtection));
+    await env.KV_NAMESPACE.put(KV_KEYS.NOTIFICATIONS, JSON.stringify(notificationSettings));
+    await env.KV_NAMESPACE.put(KV_KEYS.STATS, JSON.stringify(botSettings.stats));
   } catch (error) {
-    console.error('Error saving settings to KV:', error);
+    console.error('Error saving data to KV:', error);
   }
 }
 
-async function saveTextsToKV(env) {
-  try {
-    await env.KV_NAMESPACE.put(KV_KEYS.TEXTS, JSON.stringify(textSystem));
-  } catch (error) {
-    console.error('Error saving texts to KV:', error);
-  }
-}
-
-async function saveAllDataToKV(env) {
-  await saveUsersToKV(env);
-  await saveContentToKV(env);
-  await saveSubscriptionToKV(env);
-  await saveSettingsToKV(env);
-  await saveTextsToKV(env);
-}
-
 // ====================================================================
-// ========== النصوص الافتراضية ==========
-// ====================================================================
-
-function getDefaultTexts() {
-  return {
-    user: {
-      welcome: '🎉 مرحباً بك في البوت!\n\n🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.\n📌 أو استخدم الأزرار أدناه:',
-      search_prompt: 'أرسل رقم المحتوى الذي تريد مشاهدته:',
-      about: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
-      no_content: '❌ لا يوجد محتوى برقم {contentId}\n\nتأكد من الرقم وحاول مرة أخرى:',
-      no_content_search: '❌ لا يوجد محتوى برقم {contentId}\n\n🔍 استخدم زر "البحث عن محتوى"',
-      choose_action: 'اختر الإجراء:',
-      back_to_menu: '🔙 رجوع',
-      search_button: '🔍 البحث عن محتوى',
-      about_button: 'ℹ️ عن البوت',
-      subscription_required: '🔐 للوصول إلى محتوى البوت، يجب عليك الاشتراك في القنوات التالية:\n\n{channels}\n\n✅ بعد الاشتراك، اضغط /start مرة أخرى.',
-      not_approved: '🔐 يجب الموافقة على طلبك أولاً.\nاضغط /start',
-      request_received: '⏳ تم استلام طلبك! جاري التحقق...',
-      request_pending: '⏳ طلبك قيد المراجعة...',
-      request_verified: '🔐 يرجى مشاركة رقم هاتفك أولاً.\nاضغط /start',
-      share_phone: '🔐 للتحقق، شارك رقم هاتفك:',
-      share_phone_button: '📱 مشاركة الرقم',
-      approved: '✅ تمت الموافقة! اضغط /start',
-      rejected: '❌ طلبك مرفوض. للتواصل: @jahab',
-      reapproved: '✅ تم استئناف طلبك! اضغط /start',
-      video_error: '⚠️ حدث خطأ في عرض الفيديو',
-      photo_error: '⚠️ حدث خطأ في عرض الصورة',
-      document_error: '⚠️ حدث خطأ في عرض الملف'
-    },
-    admin: {
-      welcome: '👋 مرحباً بك في لوحة التحكم\n\n📊 الإحصائيات:\n• 📋 طلبات جديدة: {pending}\n• 📦 محتوى: {content}\n• 🔗 اشتراكات إجبارية: {subscription}\n\n📌 اختر الإدارة المناسبة:',
-      add_content_title: '➕ إضافة محتوى جديد\n\nاختر نوع المحتوى:',
-      add_content_prompt: 'أدخل عنوان المحتوى (نوع: {type}):',
-      add_content_instruction: '{instruction}\n\n(اضغط "حفظ" عند الانتهاء)',
-      add_content_success: '✅ تم إضافة {type}\nأرسل المزيد أو اضغط "حفظ المحتوى":',
-      content_saved: '✅ تم حفظ المحتوى بنجاح!\n\nالعنوان: {title}\nالنوع: {type}\nالرقم: {contentId}\nعدد العناصر: {count}\n\nرابط المشاركة:\n{shareLink}',
-      no_text: '⚠️ لم يتم إضافة أي نص!',
-      no_media: '⚠️ لم يتم إضافة أي وسائط!',
-      text_added: '✅ تم إضافة النص\nأرسل النص التالي أو اضغط "حفظ المحتوى":',
-      content_management: '📦 إدارة المحتوى\n\n📊 الإحصائيات:\n• 📦 مجموع المحتويات: {total}\n\n🔸 الإجراءات:\n• 📦 عرض الكل\n• ✏️ تعديل محتوى\n• 🗑️ حذف محتوى',
-      no_content_list: '📦 لا يوجد محتوى',
-      content_list: '📦 قائمة المحتويات:\n\n',
-      no_content_delete: '📦 لا يوجد محتوى للحذف',
-      delete_prompt: '🗑️ اختر المحتوى للحذف:',
-      no_content_edit: '📦 لا يوجد محتوى للتعديل',
-      edit_prompt: '✏️ اختر المحتوى للتعديل:',
-      edit_title_prompt: '✏️ تعديل المحتوى رقم {id}\nالعنوان الحالي: {title}\n\nأدخل العنوان الجديد:',
-      edit_content_prompt: 'أدخل المحتوى الجديد:',
-      content_edited: '✅ تم تعديل المحتوى رقم {id}',
-      content_deleted: '✅ تم حذف المحتوى رقم {id}',
-      content_not_found: '⚠️ المحتوى رقم {id} غير موجود',
-      subscription_management: '🔗 إدارة الاشتراك الإجباري\n\n📊 الحالة: {status}\n\n📢 القنوات:\n• {channels}\n\n👥 المجموعات:\n• {groups}\n\nاختر الإجراء:',
-      add_channel_prompt: 'أدخل معرف القناة (مثل: @channel أو -100123456):',
-      add_group_prompt: 'أدخل معرف المجموعة (مثل: -100123456):',
-      channel_added: '✅ تم إضافة القناة {id}',
-      channel_exists: '⚠️ القناة {id} موجودة بالفعل',
-      group_added: '✅ تم إضافة المجموعة {id}',
-      group_exists: '⚠️ المجموعة {id} موجودة بالفعل',
-      subscription_toggled: '✅ تم {status} الاشتراك الإجباري',
-      no_subscriptions: '⚠️ لا يوجد اشتراكات للحذف',
-      delete_sub_prompt: '🗑️ اختر الاشتراك للحذف:',
-      sub_deleted: '✅ تم حذف {type} {id}',
-      bot_settings: '⚙️ إعدادات البوت\n\n📝 نص "عن البوت":\n{about}\n\n📢 قناة التسجيل: {logChannel}\n\nالإجراءات:',
-      edit_about_prompt: 'أدخل النص الجديد لـ "عن البوت":\n\nالنص الحالي:\n{about}',
-      about_updated: '✅ تم تحديث نص "عن البوت"',
-      statistics: '📊 الإحصائيات العامة:\n\n👥 المستخدمين:\n• ✅ معتمدين: {approved}\n• ⏳ معلق: {pending}\n• ❌ مرفوض: {rejected}\n\n📦 المحتوى:\n• 📦 مجموع: {total}\n• 🖼️ صور: {images}\n• 🎬 فيديو: {videos}\n• 📝 نصوص: {texts}\n\n🔗 الاشتراك الإجباري:\n• 📢 قنوات: {channels}\n• 👥 مجموعات: {groups}\n• 📌 الحالة: {subStatus}\n\n📢 قناة التسجيل: {logChannel}\n\n⏱️ آخر تحديث: {time}',
-      back: '🔙 العودة',
-      cancel: '🔙 إلغاء',
-      unknown: '⚠️ خيار غير معروف. استخدم الأزرار.',
-      requests_management: '📋 إدارة الطلبات\n\n📌 المعلقة: {pending}\n❌ المرفوضة: {rejected}\n\nاختر القائمة:',
-      pending_list: '📋 الطلبات المعلقة:\n\n',
-      rejected_list: '❌ المرفوضين:\n\n',
-      approved_list: '✅ المعتمدين:\n\n',
-      no_pending: '📋 لا توجد طلبات معلقة',
-      no_rejected: '❌ لا يوجد مرفوضين',
-      no_approved: '✅ لا يوجد معتمدين',
-      approved_user: '✅ تم القبول',
-      rejected_user: '❌ تم الرفض',
-      reapproved_user: '✅ تم إعادة الموافقة',
-      user_details: '📋 تفاصيل المستخدم:\n👤 الاسم: {name}\n🆔 اليوزرنيم: @{username}\n📱 رقم الهاتف: {phone}\n🕐 تاريخ الطلب: {time}\n📌 الحالة: {status}',
-      user_deleted: '🗑️ تم حذف المستخدم',
-      text_management: '📝 إدارة النصوص\n\nاختر القسم:',
-      user_texts: '👤 نصوص المستخدم',
-      admin_texts: '👤 نصوص الأدمن',
-      text_list: '📋 قائمة النصوص:\n\n',
-      select_text: '✏️ اختر النص لتعديله:',
-      edit_text_prompt: '✏️ تعديل النص: {key}\n\nالنص الحالي:\n{current}\n\nأدخل النص الجديد:',
-      text_updated: '✅ تم تحديث النص: {key}',
-      text_not_found: '⚠️ النص غير موجود',
-      no_texts: '📋 لا توجد نصوص',
-      export_import: '🔄 تصدير/استيراد البيانات\n\n📤 تصدير: حفظ جميع البيانات (مستخدمين، محتوى، إعدادات، نصوص)\n📥 استيراد: استعادة البيانات من نسخة محفوظة',
-      export_success: '✅ تم تصدير البيانات بنجاح!\n\nعدد المستخدمين: {users}\nعدد المحتويات: {content}\nعدد النصوص: {texts}\n\n📌 انسخ البيانات أدناه للاستيراد لاحقاً:',
-      import_prompt: '📥 أرسل بيانات JSON للاستيراد:',
-      import_success: '✅ تم استيراد البيانات بنجاح!\n\nعدد المستخدمين: {users}\nعدد المحتويات: {content}\nعدد النصوص: {texts}',
-      import_error: '⚠️ فشل استيراد البيانات. تأكد من صحة التنسيق.',
-      export_button: '📤 تصدير البيانات',
-      import_button: '📥 استيراد البيانات'
-    }
-  };
-}
-
-// ====================================================================
-// ========== دوال النصوص ==========
-// ====================================================================
-
-function getText(category, key, replacements = {}) {
-  let text = textSystem[category]?.[key] || key;
-  for (const [placeholder, value] of Object.entries(replacements)) {
-    text = text.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), value);
-  }
-  return text;
-}
-
-function getUserText(key, replacements = {}) {
-  return getText('user', key, replacements);
-}
-
-function getAdminText(key, replacements = {}) {
-  return getText('admin', key, replacements);
-}
-
-// ====================================================================
-// ========== دوال التسجيل (قناة الأحداث) - مُحسّنة ==========
+// ========== دوال التسجيل ==========
 // ====================================================================
 
 async function sendLog(message, token) {
   const logChannel = botSettings.logChannel;
-  if (!logChannel) {
-    console.log('⚠️ لا توجد قناة تسجيل محددة');
-    return;
-  }
-  
-  console.log(`📤 محاولة إرسال سجل إلى: ${logChannel}`);
+  if (!logChannel) return;
   
   try {
-    const result = await sendMessage(logChannel, message, token);
-    if (result && result.ok) {
-      console.log('✅ تم إرسال السجل بنجاح');
-    } else {
-      console.log('❌ فشل إرسال السجل:', result);
-      // محاولة بديلة
-      try {
-        const url = `https://api.telegram.org/bot${token}/sendMessage`;
-        const payload = {
-          chat_id: logChannel,
-          text: message
-        };
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await response.json();
-        console.log('محاولة بديلة:', data);
-      } catch (e) {
-        console.error('فشل المحاولة البديلة:', e);
-      }
-    }
+    await sendMessage(logChannel, message, token);
   } catch (error) {
-    console.error('❌ خطأ في إرسال السجل:', error);
+    console.error('Error sending log:', error);
   }
 }
 
@@ -351,139 +227,352 @@ async function logUserAction(userId, username, action, details, token) {
 🕐 الوقت: ${timestamp}
 ─────────────────`;
 
-  console.log('📝 تسجيل إجراء:', action, 'للمستخدم:', userId);
   await sendLog(logMessage, token);
 }
 
 // ====================================================================
-// ========== دوال التصدير والاستيراد ==========
+// ========== دوال النصوص ==========
 // ====================================================================
 
-async function exportAllData(chatId, token) {
-  const exportData = {
-    version: '1.0',
-    exportedAt: new Date().toLocaleString('ar-EG'),
-    users: {
-      pending: pendingUsers,
-      rejected: rejectedUsers,
-      approved: approvedUsers
-    },
-    content: contentSystem.items,
-    subscription: mandatorySubscription,
-    settings: botSettings,
-    texts: textSystem
+const defaultTexts = {
+  user: {
+    welcome: '🎉 مرحباً بك في البوت!\n\n🔍 ابحث عن محتوى عبر إرسال رقم المحتوى.\n📌 أو استخدم الأزرار أدناه:',
+    search_prompt: 'أرسل رقم المحتوى الذي تريد مشاهدته:',
+    about: '📌 بوت رفع ومشاهدة المحتوى\n🔍 أرسل رقم المحتوى لمشاهدته',
+    no_content: '❌ لا يوجد محتوى برقم {contentId}',
+    choose_action: 'اختر الإجراء:',
+    back_to_menu: '🔙 رجوع',
+    search_button: '🔍 البحث عن محتوى',
+    about_button: 'ℹ️ عن البوت',
+    bot_stopped: '⏸️ البوت متوقف حالياً. يرجى المحاولة لاحقاً.',
+    verification_request: '🔐 يرجى التحقق من هويتك:',
+    verification_success: '✅ تم التحقق بنجاح!',
+    verification_fail: '❌ فشل التحقق. حاول مرة أخرى.'
+  },
+  admin: {
+    back: '🔙 رجوع',
+    cancel: '🔙 إلغاء'
+  }
+};
+
+let textSystem = defaultTexts;
+
+function getText(category, key, replacements = {}) {
+  let text = textSystem[category]?.[key] || key;
+  for (const [placeholder, value] of Object.entries(replacements)) {
+    text = text.replace(new RegExp(`\\{${placeholder}\\}`, 'g'), value);
+  }
+  return text;
+}
+
+function getUserText(key, replacements = {}) {
+  return getText('user', key, replacements);
+}
+
+// ====================================================================
+// ========== دوال الواجهة الرئيسية ==========
+// ====================================================================
+
+function getAdminMainMenu() {
+  const stats = botSettings.stats;
+  const text = `
+📊 **لوحة تحكم البوت**
+
+📈 **إحصائيات اليوم:**
+👥 المستخدمين: ${Object.keys(approvedUsers).length}
+🆕 المستخدمين الجدد: ${stats.newUsersToday || 0}
+💬 عدد الرسائل الإجمالي: ${stats.totalMessages || 0}
+📌 الجلسات: ${stats.sessions || 0}
+
+🔹 **اختر الإجراء المناسب:**`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '⚙️ الإعدادات', callback_data: 'admin_settings' }],
+      [{ text: '📋 إدارة الطلبات', callback_data: 'admin_requests' }],
+      [{ text: '📦 إدارة المحتوى', callback_data: 'admin_content' }],
+      [{ text: '📊 الإحصائيات', callback_data: 'admin_stats' }]
+    ]
   };
 
-  const jsonData = JSON.stringify(exportData, null, 2);
+  return { text, keyboard };
+}
+
+// ====================================================================
+// ========== دوال الإعدادات ==========
+// ====================================================================
+
+function getSettingsMenu() {
+  const text = `
+⚙️ **الإعدادات**
+
+إدارة إعدادات البوت الأساسية`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🤖 عمل البوت', callback_data: 'settings_bot' }],
+      [{ text: '✅ التحقق من العضوية', callback_data: 'settings_verification' }],
+      [{ text: '🔒 حماية المحتوى', callback_data: 'settings_protection' }],
+      [{ text: '🔔 الإشعارات', callback_data: 'settings_notifications' }],
+      [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+// ====================================================================
+// ========== دوال عمل البوت ==========
+// ====================================================================
+
+function getBotSettingsMenu() {
+  const status = botSettings.isActive ? '🟢 مفعل' : '🔴 متوقف';
+  const usersCount = Object.keys(approvedUsers).length;
   
-  if (jsonData.length > 4000) {
-    const parts = jsonData.match(/[\s\S]{1,4000}/g) || [];
-    await sendMessage(chatId, getAdminText('export_success', {
-      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
-      content: Object.keys(contentSystem.items).length,
-      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
-    }), token);
-    
-    for (let i = 0; i < parts.length; i++) {
-      await sendMessage(chatId, `📄 الجزء ${i + 1}/${parts.length}:\n\n<pre>${parts[i]}</pre>`, token, { parse_mode: 'HTML' });
-    }
+  const text = `
+🤖 **إدارة حالة البوت**
+
+🔗 **رابط الدخول:**
+${botSettings.botLink}
+
+👥 **المستخدمون:** ${usersCount}
+
+📌 **حالة البوت:** ${status}`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `🤖 ${botSettings.isActive ? 'إيقاف' : 'تشغيل'} البوت`, callback_data: 'bot_toggle' }],
+      [{ text: '📝 رسالة الإيقاف', callback_data: 'bot_stop_message' }],
+      [{ text: '🔄 تغيير الرابط', callback_data: 'bot_change_link' }],
+      [{ text: '🗑️ مسح قائمة المستخدمين', callback_data: 'bot_clear_users' }],
+      [{ text: '🔙 رجوع', callback_data: 'settings_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+// ====================================================================
+// ========== دوال التحقق ==========
+// ====================================================================
+
+function getVerificationMenu() {
+  const status = verificationSystem.enabled ? '🟢 مفعل' : '🔴 معطل';
+  const typeMap = {
+    phone: '📱 رقم الهاتف',
+    math: '🧮 معادلة رياضية',
+    admin: '👤 موافقة المشرف'
+  };
+  
+  const text = `
+✅ **التحقق من العضوية**
+
+📌 **الحالة:** ${status}
+📌 **نوع التحقق:** ${typeMap[verificationSystem.type] || 'غير محدد'}
+
+🔹 اختر الإجراء:`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `🔄 ${verificationSystem.enabled ? 'تعطيل' : 'تفعيل'} التحقق`, callback_data: 'verif_toggle' }],
+      [{ text: '📝 نوع التحقق', callback_data: 'verif_type' }],
+      [{ text: '✏️ رسائل التحقق', callback_data: 'verif_messages' }],
+      [{ text: '👥 الأعضاء المتحققين', callback_data: 'verif_users' }],
+      [{ text: '🔙 رجوع', callback_data: 'settings_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+function getVerificationTypeMenu() {
+  const types = [
+    { text: '📱 رقم الهاتف', data: 'verif_type_phone' },
+    { text: '🧮 معادلة رياضية', data: 'verif_type_math' },
+    { text: '👤 موافقة المشرف', data: 'verif_type_admin' }
+  ];
+  
+  const buttons = types.map(t => [{ text: t.text + (verificationSystem.type === t.text.includes('رقم') ? ' ✅' : t.text.includes('معادلة') && verificationSystem.type === 'math' ? ' ✅' : t.text.includes('مشرف') && verificationSystem.type === 'admin' ? ' ✅' : ''), callback_data: t.data }]);
+  
+  const text = `
+📝 **اختر نوع التحقق:**
+
+الحالي: ${verificationSystem.type}`;
+
+  const keyboard = {
+    inline_keyboard: [
+      ...buttons,
+      [{ text: '🔙 رجوع', callback_data: 'verif_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+function getVerificationMessagesMenu() {
+  const text = `
+✏️ **رسائل التحقق**
+
+📌 **رسالة طلب التحقق:**
+${verificationSystem.messages.request}
+
+📌 **رسالة نجاح التحقق:**
+${verificationSystem.messages.success}
+
+📌 **رسالة فشل التحقق:**
+${verificationSystem.messages.fail}
+
+🔹 اختر الرسالة لتعديلها:`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '📝 رسالة الطلب', callback_data: 'verif_msg_request' }],
+      [{ text: '✅ رسالة النجاح', callback_data: 'verif_msg_success' }],
+      [{ text: '❌ رسالة الفشل', callback_data: 'verif_msg_fail' }],
+      [{ text: '🔙 رجوع', callback_data: 'verif_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+function getVerifiedUsersMenu() {
+  const users = Object.keys(verificationSystem.verifiedUsers);
+  let text = `👥 **الأعضاء المتحققين**\n\n`;
+  
+  if (users.length === 0) {
+    text += 'لا يوجد أعضاء متحققين.';
   } else {
-    await sendMessage(chatId, getAdminText('export_success', {
-      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
-      content: Object.keys(contentSystem.items).length,
-      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
-    }) + `\n\n<pre>${jsonData}</pre>`, token, { parse_mode: 'HTML' });
-  }
-}
-
-async function importAllData(chatId, text, token, env) {
-  try {
-    const data = JSON.parse(text);
-    
-    if (!data.users || !data.content || !data.subscription || !data.settings || !data.texts) {
-      throw new Error('بيانات غير مكتملة');
+    users.slice(0, 10).forEach(id => {
+      const user = verificationSystem.verifiedUsers[id];
+      text += `• ${user?.name || id}\n`;
+    });
+    if (users.length > 10) {
+      text += `\n... و${users.length - 10} أعضاء آخرين`;
     }
-
-    pendingUsers = data.users.pending || {};
-    rejectedUsers = data.users.rejected || {};
-    approvedUsers = data.users.approved || {};
-    await saveUsersToKV(env);
-
-    contentSystem.items = data.content || {};
-    await saveContentToKV(env);
-
-    mandatorySubscription = data.subscription || { channels: [], groups: [], enabled: false };
-    await saveSubscriptionToKV(env);
-
-    botSettings = data.settings || botSettings;
-    await saveSettingsToKV(env);
-
-    textSystem = data.texts || getDefaultTexts();
-    await saveTextsToKV(env);
-
-    await sendMessage(chatId, getAdminText('import_success', {
-      users: Object.keys(approvedUsers).length + Object.keys(pendingUsers).length + Object.keys(rejectedUsers).length,
-      content: Object.keys(contentSystem.items).length,
-      texts: Object.keys(textSystem.user).length + Object.keys(textSystem.admin).length
-    }), token);
-    
-    await showAdminMainMenu(chatId, token);
-  } catch (error) {
-    console.error('Import error:', error);
-    await sendMessage(chatId, getAdminText('import_error'), token);
   }
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '➕ إضافة مستخدم', callback_data: 'verif_user_add' }],
+      [{ text: '🗑️ حذف مستخدم', callback_data: 'verif_user_remove' }],
+      [{ text: '🗑️ حذف الكل', callback_data: 'verif_user_clear' }],
+      [{ text: '🔙 رجوع', callback_data: 'verif_back' }]
+    ]
+  };
+
+  return { text, keyboard };
 }
 
 // ====================================================================
-// ========== نظام الاشتراك الإجباري ==========
+// ========== دوال حماية المحتوى ==========
 // ====================================================================
 
-async function checkMandatorySubscription(userId, token) {
-  if (!mandatorySubscription.enabled) return true;
-  
-  try {
-    for (const channel of mandatorySubscription.channels) {
-      const chatMember = await getChatMember(channel, userId, token);
-      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
-        return false;
-      }
-    }
-    
-    for (const group of mandatorySubscription.groups) {
-      const chatMember = await getChatMember(group, userId, token);
-      if (!chatMember || chatMember.status === 'left' || chatMember.status === 'kicked') {
-        return false;
-      }
-    }
-    
-    return true;
-  } catch (error) {
-    return true;
-  }
+function getProtectionMenu() {
+  const text = `
+🔒 **حماية محتوى البوت**
+
+تمنع المستخدمين من حفظ رسائل البوت وتوجيهها
+
+📷 **استثناء الميديا:** ${contentProtection.excludeMedia ? '🟢 مفعل' : '🔴 معطل'}
+🔗 **استثناء الروابط:** ${contentProtection.excludeLinks ? '🟢 مفعل' : '🔴 معطل'}
+📝 **استثناء النصوص:** ${contentProtection.excludeText ? '🟢 مفعل' : '🔴 معطل'}`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `🔒 ${contentProtection.enabled ? 'تعطيل' : 'تفعيل'} الحماية`, callback_data: 'protect_toggle' }],
+      [{ text: `📷 استثناء الميديا: ${contentProtection.excludeMedia ? '✅' : '❌'}`, callback_data: 'protect_media' }],
+      [{ text: `🔗 استثناء الروابط: ${contentProtection.excludeLinks ? '✅' : '❌'}`, callback_data: 'protect_links' }],
+      [{ text: `📝 استثناء النصوص: ${contentProtection.excludeText ? '✅' : '❌'}`, callback_data: 'protect_text' }],
+      [{ text: '🔙 رجوع', callback_data: 'settings_back' }]
+    ]
+  };
+
+  return { text, keyboard };
 }
 
-async function getChatMember(chatId, userId, token) {
-  const url = `https://api.telegram.org/bot${token}/getChatMember`;
+// ====================================================================
+// ========== دوال الإشعارات ==========
+// ====================================================================
+
+function getNotificationsMenu() {
+  const text = `
+🔔 **الإشعارات**
+
+📌 **إشعار الدخول:** ${notificationSettings.joinNotification ? '🟢 مفعل' : '🔴 معطل'}
+📌 **إشعار الحظر:** ${notificationSettings.banNotification ? '🟢 مفعل' : '🔴 معطل'}`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: `🔔 إشعار الدخول: ${notificationSettings.joinNotification ? '✅' : '❌'}`, callback_data: 'notif_join' }],
+      [{ text: `🚫 إشعار الحظر: ${notificationSettings.banNotification ? '✅' : '❌'}`, callback_data: 'notif_ban' }],
+      [{ text: '🔙 رجوع', callback_data: 'settings_back' }]
+    ]
+  };
+
+  return { text, keyboard };
+}
+
+// ====================================================================
+// ========== دوال إرسال الرسائل ==========
+// ====================================================================
+
+async function sendMessage(chatId, text, token, options = {}) {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const payload = { 
+    chat_id: chatId, 
+    text: text, 
+    parse_mode: 'Markdown',
+    ...options 
+  };
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, user_id: userId })
+      body: JSON.stringify(payload)
     });
-    const data = await response.json();
-    return data.result;
+    return await response.json();
   } catch (error) {
-    return null;
+    console.error('Error sending message:', error);
+    return { ok: false };
   }
 }
 
-async function sendSubscriptionMessage(chatId, token) {
-  const channelsList = mandatorySubscription.channels.map(c => `• ${c}`).join('\n');
-  const groupsList = mandatorySubscription.groups.map(g => `• ${g}`).join('\n');
-  const allSubs = [channelsList, groupsList].filter(s => s).join('\n');
-  
-  const message = getUserText('subscription_required', { channels: allSubs || 'لا يوجد' });
-  await sendMessage(chatId, message, token);
+async function editMessage(chatId, messageId, text, token, options = {}) {
+  const url = `https://api.telegram.org/bot${token}/editMessageText`;
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text: text,
+    parse_mode: 'Markdown',
+    ...options
+  };
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await response.json();
+  } catch (error) {
+    console.error('Error editing message:', error);
+    return { ok: false };
+  }
+}
+
+async function answerCallbackQuery(callbackId, text, token) {
+  const url = `https://api.telegram.org/bot${token}/answerCallbackQuery`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callback_query_id: callbackId, text: text })
+    });
+  } catch (error) {
+    console.error('Error answering callback:', error);
+  }
 }
 
 // ====================================================================
@@ -495,6 +584,23 @@ async function handleTelegramUpdate(update, env) {
   const ADMIN_ID = env.ADMIN_ID;
 
   try {
+    // معالجة الكولباك (الأزرار)
+    if (update.callback_query) {
+      const query = update.callback_query;
+      const userId = query.from.id;
+      const data = query.data;
+      const chatId = query.message.chat.id;
+      const messageId = query.message.message_id;
+
+      if (userId.toString() === ADMIN_ID) {
+        await handleAdminCallback(data, chatId, messageId, token, env);
+        await answerCallbackQuery(query.id, '✅ تم', token);
+        return;
+      }
+      return;
+    }
+
+    // معالجة الرسائل
     if (update.message) {
       const msg = update.message;
       const chatId = msg.chat.id;
@@ -503,75 +609,47 @@ async function handleTelegramUpdate(update, env) {
 
       // ========== واجهة الأدمن ==========
       if (userId.toString() === ADMIN_ID) {
-        if (msg.video || msg.animation || msg.document || msg.photo) {
-          await handleAdminMedia(chatId, msg, token);
-          return;
-        }
-
         if (text === '/start' || text === '/admin') {
-          await showAdminMainMenu(chatId, token);
+          const menu = getAdminMainMenu();
+          await sendMessage(chatId, menu.text, token, { reply_markup: menu.keyboard });
           return;
         }
-        await handleAdminActions(chatId, text, token, env);
         return;
       }
 
       // ========== واجهة المستخدم ==========
+      // التحقق من حالة البوت
+      if (!botSettings.isActive) {
+        await sendMessage(chatId, botSettings.stopMessage, token);
+        return;
+      }
+
+      // التحقق من المستخدم
       if (rejectedUsers[userId]) {
-        await sendMessage(chatId, getUserText('rejected'), token, {
-          reply_markup: { remove_keyboard: true }
-        });
+        await sendMessage(chatId, '❌ طلبك مرفوض.', token);
         return;
       }
 
-      if (text && text.startsWith('/start share_')) {
-        const contentId = text.replace('/start share_', '').trim();
-        
-        if (!approvedUsers[userId]) {
-          await sendMessage(chatId, getUserText('not_approved'), token);
-          return;
-        }
-
-        const subscribed = await checkMandatorySubscription(userId, token);
-        if (!subscribed) {
-          await sendSubscriptionMessage(chatId, token);
-          return;
-        }
-
-        const item = contentSystem.items[contentId];
-        if (item) {
-          userState[userId] = { step: 'main' };
-          await sendContent(chatId, item, token);
-        } else {
-          await sendMessage(chatId, getUserText('no_content', { contentId }), token);
-          await showUserMainMenu(chatId, token);
-        }
-        return;
-      }
-
+      // معالجة /start للمستخدمين
       if (text === '/start') {
         if (approvedUsers[userId]) {
-          const subscribed = await checkMandatorySubscription(userId, token);
-          if (!subscribed) {
-            await sendSubscriptionMessage(chatId, token);
-            return;
-          }
+          // تحديث الإحصائيات
+          botSettings.stats.sessions = (botSettings.stats.sessions || 0) + 1;
+          await saveAllData(env);
           
-          userState[userId] = { step: 'main' };
           await showUserMainMenu(chatId, token);
           return;
         }
 
         if (pendingUsers[userId]) {
-          await sendMessage(chatId, getUserText('request_pending'), token, {
-            reply_markup: { remove_keyboard: true }
-          });
+          await sendMessage(chatId, '⏳ طلبك قيد المراجعة...', token);
           return;
         }
 
-        await sendMessage(chatId, getUserText('share_phone'), token, {
+        // طلب رقم الهاتف
+        await sendMessage(chatId, '🔐 شارك رقم هاتفك للتحقق:', token, {
           reply_markup: {
-            keyboard: [[{ text: getUserText('share_phone_button'), request_contact: true }]],
+            keyboard: [[{ text: '📱 مشاركة الرقم', request_contact: true }]],
             resize_keyboard: true,
             one_time_keyboard: true
           }
@@ -579,9 +657,9 @@ async function handleTelegramUpdate(update, env) {
         return;
       }
 
+      // معالجة رقم الهاتف
       if (msg.contact) {
         const contact = msg.contact;
-        
         if (contact.user_id !== userId) {
           await sendMessage(chatId, '❌ يرجى مشاركة رقمك الخاص!', token);
           return;
@@ -601,46 +679,27 @@ async function handleTelegramUpdate(update, env) {
         };
 
         pendingUsers[userId] = userData;
-        await saveUsersToKV(env);
+        botSettings.stats.newUsersToday = (botSettings.stats.newUsersToday || 0) + 1;
+        await saveAllData(env);
 
-        await sendMessage(chatId, getUserText('request_received'), token, {
-          reply_markup: { remove_keyboard: true }
-        });
-
-        const adminMsg = `📢 طلب انضمام جديد!\n👤 ${userData.name}\n🆔 @${userData.username}\n📱 ${userData.phone}`;
-        await sendMessage(ADMIN_ID, adminMsg, token);
+        await sendMessage(chatId, '⏳ تم استلام طلبك! جاري التحقق...', token);
         
-        await logUserAction(userId, userData.username, '📋 طلب انضمام', `الاسم: ${userData.name}`, token);
+        const adminMsg = `📢 طلب انضمام جديد!\n👤 ${userData.name}\n🆔 @${userData.username}`;
+        await sendMessage(ADMIN_ID, adminMsg, token);
         return;
       }
 
-      if (!approvedUsers[userId]) {
-        await sendMessage(chatId, getUserText('request_verified'), token);
+      // معالجة البحث عن محتوى
+      if (approvedUsers[userId]) {
+        // تحديث الإحصائيات
+        botSettings.stats.totalMessages = (botSettings.stats.totalMessages || 0) + 1;
+        await saveAllData(env);
+        
+        await handleUserSearch(chatId, text, token, userId);
         return;
       }
 
-      const subscribed = await checkMandatorySubscription(userId, token);
-      if (!subscribed) {
-        await sendSubscriptionMessage(chatId, token);
-        return;
-      }
-
-      await handleUserSearch(chatId, text, token, userId);
-      return;
-    }
-
-    if (update.callback_query) {
-      const query = update.callback_query;
-      const userId = query.from.id;
-      const data = query.data;
-      const chatId = query.message.chat.id;
-      const messageId = query.message.message_id;
-
-      if (userId.toString() === ADMIN_ID) {
-        await handleAdminCallback(data, chatId, messageId, token, env);
-        await answerCallbackQuery(query.id, '✅ تم', token);
-        return;
-      }
+      await sendMessage(chatId, '🔐 يرجى مشاركة رقم هاتفك أولاً.\nاضغط /start', token);
     }
   } catch (error) {
     console.error('Error in handleTelegramUpdate:', error);
@@ -648,1328 +707,82 @@ async function handleTelegramUpdate(update, env) {
 }
 
 // ====================================================================
-// ========== دوال الأدمن ==========
-// ====================================================================
-
-async function showAdminMainMenu(chatId, token) {
-  const pendingCount = Object.keys(pendingUsers).length;
-  const contentCount = Object.keys(contentSystem.items).length;
-  const subscriptionCount = mandatorySubscription.channels.length + mandatorySubscription.groups.length;
-
-  const message = getAdminText('welcome', {
-    pending: pendingCount,
-    content: contentCount,
-    subscription: subscriptionCount
-  });
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['➕ إضافة محتوى', '📋 إدارة الطلبات'],
-        ['📦 إدارة المحتوى', '🔗 الاشتراك الإجباري'],
-        ['📝 إدارة النصوص', '⚙️ إعدادات البوت'],
-        ['🔄 تصدير/استيراد', '📊 الإحصائيات'],
-        ['📢 اختبار القناة', getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function handleAdminActions(chatId, text, token, env) {
-  // ===== اختبار قناة الأحداث =====
-  if (text === '📢 اختبار القناة') {
-    await sendLog('🧪 هذا اختبار لقناة الأحداث! 🧪\n\n✅ إذا رأيت هذه الرسالة، فإن القناة تعمل بشكل صحيح.', token);
-    await sendMessage(chatId, '✅ تم إرسال اختبار إلى قناة الأحداث', token);
-    return;
-  }
-
-  // ===== معالجة نصوص المستخدم والأدمن =====
-  if (text === '👤 نصوص المستخدم') {
-    await showTextList(chatId, 'user', token);
-    return;
-  }
-
-  if (text === '👤 نصوص الأدمن') {
-    await showTextList(chatId, 'admin', token);
-    return;
-  }
-
-  switch(text) {
-    case '➕ إضافة محتوى':
-      await showAddContentMenu(chatId, token);
-      break;
-      
-    case '📋 إدارة الطلبات':
-      await showRequestsManagement(chatId, token);
-      break;
-      
-    case '📦 إدارة المحتوى':
-      await showContentManagement(chatId, token);
-      break;
-      
-    case '🔗 الاشتراك الإجباري':
-      await showSubscriptionManagement(chatId, token);
-      break;
-      
-    case '📝 إدارة النصوص':
-      await showTextManagement(chatId, token);
-      break;
-      
-    case '⚙️ إعدادات البوت':
-      await showBotSettings(chatId, token);
-      break;
-      
-    case '🔄 تصدير/استيراد':
-      await showExportImport(chatId, token);
-      break;
-      
-    case '📊 الإحصائيات':
-      await showStatistics(chatId, token);
-      break;
-      
-    case getAdminText('back'):
-    case 'رجوع':
-    case '🔙 إلغاء':
-      adminState.currentAction = null;
-      adminState.step = null;
-      adminState.tempData = {};
-      await showAdminMainMenu(chatId, token);
-      break;
-      
-    default:
-      await handleAdminSubActions(chatId, text, token, env);
-      break;
-  }
-}
-
-// ====================================================================
-// ========== تصدير/استيراد ==========
-// ====================================================================
-
-async function showExportImport(chatId, token) {
-  const message = getAdminText('export_import');
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['📤 تصدير البيانات', '📥 استيراد البيانات'],
-        [getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-// ====================================================================
-// ========== إدارة النصوص ==========
-// ====================================================================
-
-async function showTextManagement(chatId, token) {
-  const message = getAdminText('text_management');
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['👤 نصوص المستخدم', '👤 نصوص الأدمن'],
-        [getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function showTextList(chatId, category, token) {
-  const texts = textSystem[category];
-  if (!texts) {
-    await sendMessage(chatId, getAdminText('no_texts'), token);
-    return;
-  }
-
-  let message = getAdminText('text_list');
-  const buttons = [];
-  
-  let count = 0;
-  for (const [key, value] of Object.entries(texts)) {
-    if (count >= 20) {
-      message += `\n... و${Object.keys(texts).length - count} نصوص أخرى`;
-      break;
-    }
-    const shortValue = value.length > 30 ? value.substring(0, 30) + '...' : value;
-    message += `• ${key}: ${shortValue}\n`;
-    buttons.push([{ text: `✏️ ${key}`, callback_data: `edit_text_${category}_${key}` }]);
-    count++;
-  }
-  
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_back' }]);
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function handleEditText(chatId, category, key, token) {
-  const currentText = textSystem[category]?.[key];
-  if (!currentText) {
-    await sendMessage(chatId, getAdminText('text_not_found'), token);
-    return;
-  }
-
-  adminState.currentAction = 'edit_text';
-  adminState.step = 'waiting_text';
-  adminState.tempData = { category, key };
-
-  const message = getAdminText('edit_text_prompt', {
-    key: key,
-    current: currentText
-  });
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [[getAdminText('cancel')]],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function saveEditedText(chatId, text, token, env) {
-  const { category, key } = adminState.tempData;
-  
-  if (textSystem[category]) {
-    textSystem[category][key] = text;
-    await saveTextsToKV(env);
-  }
-
-  await sendMessage(chatId, getAdminText('text_updated', { key }), token);
-  
-  adminState.currentAction = null;
-  adminState.step = null;
-  adminState.tempData = {};
-  await showTextManagement(chatId, token);
-}
-
-// ====================================================================
-// ========== إضافة محتوى ==========
-// ====================================================================
-
-async function showAddContentMenu(chatId, token) {
-  const message = getAdminText('add_content_title');
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['🖼️ صورة', '🎬 فيديو', '📝 نص'],
-        [getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function handleAdminSubActions(chatId, text, token, env) {
-  // ===== اختيار نوع المحتوى =====
-  if (text === '🖼️ صورة' || text === '🎬 فيديو' || text === '📝 نص') {
-    const typeMap = {
-      '🖼️ صورة': 'image',
-      '🎬 فيديو': 'video',
-      '📝 نص': 'text'
-    };
-    
-    adminState.currentAction = 'add_content';
-    adminState.step = 'waiting_title';
-    adminState.tempData.type = typeMap[text];
-    adminState.tempData.mediaItems = [];
-    
-    await sendMessage(chatId, 
-      getAdminText('add_content_prompt', { type: text }),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  // ===== معالجة عنوان المحتوى =====
-  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_title') {
-    adminState.tempData.title = text;
-    adminState.step = 'waiting_content';
-    
-    const type = adminState.tempData.type;
-    let instruction = '';
-    if (type === 'image') instruction = 'أرسل الصور (يمكنك إرسال عدة صور):';
-    else if (type === 'video') instruction = 'أرسل الفيديو:';
-    else if (type === 'text') instruction = 'أرسل النص (يمكنك إرسال عدة نصوص):';
-    
-    await sendMessage(chatId, 
-      getAdminText('add_content_instruction', { instruction }),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            ['✅ حفظ المحتوى'],
-            [getAdminText('cancel')]
-          ], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  // ===== حفظ المحتوى =====
-  if (text === '✅ حفظ المحتوى' && adminState.currentAction === 'add_content') {
-    await saveSingleContent(chatId, token, env);
-    return;
-  }
-
-  // ===== إلغاء =====
-  if (text === getAdminText('cancel') || text === getAdminText('back')) {
-    adminState.currentAction = null;
-    adminState.step = null;
-    adminState.tempData = {};
-    await showAdminMainMenu(chatId, token);
-    return;
-  }
-
-  // ===== معالجة النص =====
-  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content') {
-    if (adminState.tempData.type === 'text') {
-      if (!adminState.tempData.texts) {
-        adminState.tempData.texts = [];
-      }
-      adminState.tempData.texts.push(text);
-      
-      await sendMessage(chatId, 
-        getAdminText('text_added'),
-        token,
-        { 
-          reply_markup: { 
-            keyboard: [
-              ['✅ حفظ المحتوى'],
-              [getAdminText('cancel')]
-            ], 
-            resize_keyboard: true 
-          }
-        }
-      );
-    }
-    return;
-  }
-
-  // ===== تعديل المحتوى =====
-  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_new_title') {
-    adminState.tempData.newTitle = text;
-    adminState.step = 'waiting_new_content';
-    
-    await sendMessage(chatId, 
-      getAdminText('edit_content_prompt'),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  if (adminState.currentAction === 'edit_content' && adminState.step === 'waiting_new_content') {
-    const contentId = adminState.tempData.contentId;
-    const item = contentSystem.items[contentId];
-    
-    if (item) {
-      item.title = adminState.tempData.newTitle;
-      item.content = text;
-      item.date = new Date().toLocaleString('ar-EG');
-      await saveContentToKV(env);
-      
-      await sendMessage(chatId, getAdminText('content_edited', { id: contentId }), token);
-      adminState.currentAction = null;
-      adminState.step = null;
-      adminState.tempData = {};
-      await showContentManagement(chatId, token);
-    }
-    return;
-  }
-
-  // ===== تعديل النصوص =====
-  if (adminState.currentAction === 'edit_text' && adminState.step === 'waiting_text') {
-    await saveEditedText(chatId, text, token, env);
-    return;
-  }
-
-  // ===== تصدير البيانات =====
-  if (text === '📤 تصدير البيانات') {
-    await exportAllData(chatId, token);
-    return;
-  }
-
-  // ===== استيراد البيانات =====
-  if (text === '📥 استيراد البيانات') {
-    adminState.currentAction = 'import_data';
-    adminState.step = 'waiting_data';
-    await sendMessage(chatId, 
-      getAdminText('import_prompt'),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  // ===== معالجة استيراد البيانات =====
-  if (adminState.currentAction === 'import_data' && adminState.step === 'waiting_data') {
-    await importAllData(chatId, text, token, env);
-    adminState.currentAction = null;
-    adminState.step = null;
-    return;
-  }
-
-  // ===== إدارة الاشتراك الإجباري =====
-  if (text === '➕ إضافة قناة') {
-    adminState.currentAction = 'add_channel';
-    adminState.step = 'waiting_input';
-    await sendMessage(chatId, 
-      getAdminText('add_channel_prompt'),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  if (text === '➕ إضافة مجموعة') {
-    adminState.currentAction = 'add_group';
-    adminState.step = 'waiting_input';
-    await sendMessage(chatId, 
-      getAdminText('add_group_prompt'),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  if (text === '🔄 تفعيل/تعطيل') {
-    mandatorySubscription.enabled = !mandatorySubscription.enabled;
-    const status = mandatorySubscription.enabled ? 'تفعيل' : 'تعطيل';
-    await saveSubscriptionToKV(env);
-    await sendMessage(chatId, 
-      getAdminText('subscription_toggled', { status }),
-      token
-    );
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  if (text === '🗑️ حذف قناة' || text === '🗑️ حذف مجموعة') {
-    await showDeleteSubscriptionMenu(chatId, token);
-    return;
-  }
-
-  // ===== معالجة إضافة قناة/مجموعة =====
-  if (adminState.currentAction === 'add_channel' && adminState.step === 'waiting_input') {
-    if (!mandatorySubscription.channels.includes(text)) {
-      mandatorySubscription.channels.push(text);
-      await saveSubscriptionToKV(env);
-      await sendMessage(chatId, getAdminText('channel_added', { id: text }), token);
-    } else {
-      await sendMessage(chatId, getAdminText('channel_exists', { id: text }), token);
-    }
-    adminState.currentAction = null;
-    adminState.step = null;
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  if (adminState.currentAction === 'add_group' && adminState.step === 'waiting_input') {
-    if (!mandatorySubscription.groups.includes(text)) {
-      mandatorySubscription.groups.push(text);
-      await saveSubscriptionToKV(env);
-      await sendMessage(chatId, getAdminText('group_added', { id: text }), token);
-    } else {
-      await sendMessage(chatId, getAdminText('group_exists', { id: text }), token);
-    }
-    adminState.currentAction = null;
-    adminState.step = null;
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  // ===== إعدادات البوت =====
-  if (text === '✏️ تعديل نص عن البوت') {
-    adminState.currentAction = 'edit_about';
-    adminState.step = 'waiting_input';
-    await sendMessage(chatId, 
-      getAdminText('edit_about_prompt', { about: botSettings.aboutText }),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  if (adminState.currentAction === 'edit_about' && adminState.step === 'waiting_input') {
-    botSettings.aboutText = text;
-    await saveSettingsToKV(env);
-    await sendMessage(chatId, getAdminText('about_updated'), token);
-    adminState.currentAction = null;
-    adminState.step = null;
-    await showBotSettings(chatId, token);
-    return;
-  }
-
-  // ===== أي شيء آخر =====
-  await sendMessage(chatId, getAdminText('unknown'), token);
-}
-
-// ========== معالجة وسائط الأدمن ==========
-
-async function handleAdminMedia(chatId, msg, token) {
-  if (adminState.currentAction === 'add_content' && adminState.step === 'waiting_content') {
-    let fileId = '';
-    let type = adminState.tempData.type;
-    let caption = msg.caption || '';
-
-    if (msg.video) {
-      fileId = msg.video.file_id;
-      type = 'video';
-    } else if (msg.animation) {
-      fileId = msg.animation.file_id;
-      type = 'animation';
-    } else if (msg.document) {
-      fileId = msg.document.file_id;
-      type = 'document';
-    } else if (msg.photo) {
-      const photo = msg.photo[msg.photo.length - 1];
-      fileId = photo.file_id;
-      type = 'image';
-    }
-
-    if (!adminState.tempData.mediaItems) {
-      adminState.tempData.mediaItems = [];
-    }
-
-    adminState.tempData.mediaItems.push({
-      fileId: fileId,
-      type: type,
-      caption: caption
-    });
-
-    const typeLabel = type === 'image' ? 'صورة' : type === 'video' ? 'فيديو' : 'ملف';
-    await sendMessage(chatId, 
-      getAdminText('add_content_success', { type: typeLabel }),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            ['✅ حفظ المحتوى'],
-            [getAdminText('cancel')]
-          ], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  await sendMessage(chatId, '⚠️ لا يمكنك إرسال وسائط الآن.', token);
-}
-
-// ========== حفظ محتوى واحد ==========
-
-async function saveSingleContent(chatId, token, env) {
-  const title = adminState.tempData.title;
-  const type = adminState.tempData.type;
-  const mediaItems = adminState.tempData.mediaItems || [];
-  const texts = adminState.tempData.texts || [];
-  
-  if (type === 'text' && texts.length === 0) {
-    await sendMessage(chatId, getAdminText('no_text'), token);
-    return;
-  }
-  
-  if ((type === 'image' || type === 'video') && mediaItems.length === 0) {
-    await sendMessage(chatId, getAdminText('no_media'), token);
-    return;
-  }
-
-  const contentId = generateContentId();
-  let contentText = '';
-  let fileId = null;
-
-  if (type === 'text') {
-    contentText = texts.join('\n\n─────────────────\n\n');
-  } else if (mediaItems.length === 1) {
-    fileId = mediaItems[0].fileId;
-    contentText = mediaItems[0].caption || '';
-  } else {
-    fileId = mediaItems[0].fileId;
-    contentText = `📎 عدد الوسائط: ${mediaItems.length}`;
-  }
-
-  contentSystem.items[contentId] = {
-    id: contentId,
-    type: type,
-    title: title,
-    content: contentText,
-    fileId: fileId,
-    mediaItems: mediaItems.length > 1 ? mediaItems : null,
-    date: new Date().toLocaleString('ar-EG')
-  };
-
-  await saveContentToKV(env);
-
-  const botUsername = (await getBotInfo(token)).username;
-  const shareLink = `https://t.me/${botUsername}?start=share_${contentId}`;
-
-  await sendMessage(chatId, 
-    getAdminText('content_saved', {
-      title,
-      type,
-      contentId,
-      count: type === 'text' ? texts.length : mediaItems.length,
-      shareLink
-    }),
-    token
-  );
-  
-  adminState.currentAction = null;
-  adminState.step = null;
-  adminState.tempData = {};
-  await showAdminMainMenu(chatId, token);
-}
-
-// ====================================================================
 // ========== دوال المستخدم ==========
 // ====================================================================
 
 async function showUserMainMenu(chatId, token) {
-  const message = getUserText('welcome');
+  const text = getUserText('welcome');
+  
+  const keyboard = {
+    keyboard: [
+      [getUserText('search_button')],
+      [getUserText('about_button')]
+    ],
+    resize_keyboard: true
+  };
 
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        [getUserText('search_button')],
-        [getUserText('about_button')]
-      ],
-      resize_keyboard: true
-    }
-  });
+  await sendMessage(chatId, text, token, { reply_markup: keyboard });
 }
 
 async function handleUserSearch(chatId, text, token, userId) {
+  // معالجة الأزرار
   if (text === getUserText('search_button')) {
-    userState[userId] = { step: 'searching' };
-    
-    const username = await getUsername(userId, token);
-    await logUserAction(userId, username, '🔍 بحث عن محتوى', 'فتح نافذة البحث', token);
-    
-    await sendMessage(chatId, 
-      getUserText('search_prompt'),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [
-            [getUserText('back_to_menu')]
-          ], 
-          resize_keyboard: true 
-        }
+    await sendMessage(chatId, getUserText('search_prompt'), token, {
+      reply_markup: {
+        keyboard: [[getUserText('back_to_menu')]],
+        resize_keyboard: true
       }
-    );
+    });
     return;
   }
 
   if (text === getUserText('about_button')) {
-    const username = await getUsername(userId, token);
-    await logUserAction(userId, username, 'ℹ️ عن البوت', 'عرض معلومات البوت', token);
-    
     await sendMessage(chatId, getUserText('about'), token);
     return;
   }
 
   if (text === getUserText('back_to_menu')) {
-    const username = await getUsername(userId, token);
-    await logUserAction(userId, username, '🔙 رجوع', 'العودة إلى القائمة الرئيسية', token);
-    
-    userState[userId] = { step: 'main' };
     await showUserMainMenu(chatId, token);
     return;
   }
 
-  if (userState[userId] && userState[userId].step === 'searching') {
-    const contentId = text.trim();
-    const item = contentSystem.items[contentId];
-    
-    const username = await getUsername(userId, token);
-    
-    if (item) {
-      await logUserAction(userId, username, '📖 مشاهدة محتوى', `رقم ${contentId} - ${item.title}`, token);
-      await sendContent(chatId, item, token);
-    } else {
-      await logUserAction(userId, username, '❌ بحث فاشل', `رقم ${contentId} غير موجود`, token);
-      await sendMessage(chatId, 
-        getUserText('no_content', { contentId }),
-        token
-      );
-    }
-    return;
-  }
-
+  // البحث عن محتوى
   const contentId = text.trim();
   const item = contentSystem.items[contentId];
   
-  const username = await getUsername(userId, token);
-  
   if (item) {
-    await logUserAction(userId, username, '📖 مشاهدة محتوى', `رقم ${contentId} - ${item.title}`, token);
     await sendContent(chatId, item, token);
   } else {
-    await logUserAction(userId, username, '❌ بحث فاشل', `رقم ${contentId} غير موجود`, token);
-    await sendMessage(chatId, 
-      getUserText('no_content_search', { contentId }),
-      token
-    );
+    await sendMessage(chatId, getUserText('no_content', { contentId }), token);
   }
 }
-
-async function getUsername(userId, token) {
-  try {
-    const url = `https://api.telegram.org/bot${token}/getChat`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: userId })
-    });
-    const data = await response.json();
-    return data.result?.username || null;
-  } catch (error) {
-    return null;
-  }
-}
-
-// ========== إرسال المحتوى للمستخدم ==========
 
 async function sendContent(chatId, item, token) {
-  const title = item.title;
-
-  if (item.mediaItems && item.mediaItems.length > 1) {
-    const firstMedia = item.mediaItems[0];
-    if (firstMedia.type === 'image') {
-      await sendPhoto(chatId, firstMedia.fileId, title, token);
-    } else if (firstMedia.type === 'video') {
-      await sendVideo(chatId, firstMedia.fileId, title, token);
-    }
-    
-    for (let i = 1; i < item.mediaItems.length; i++) {
-      const media = item.mediaItems[i];
-      if (media.type === 'image') {
-        await sendPhoto(chatId, media.fileId, '', token);
-      } else if (media.type === 'video') {
-        await sendVideo(chatId, media.fileId, '', token);
-      }
-    }
-  } 
-  else if (item.fileId && (item.type === 'video' || item.type === 'animation')) {
-    await sendVideo(chatId, item.fileId, title, token);
-  } else if (item.fileId && item.type === 'image') {
-    await sendPhoto(chatId, item.fileId, title, token);
-  } else if (item.fileId && item.type === 'document') {
-    await sendDocument(chatId, item.fileId, title, token);
-  } else {
-    await sendMessage(chatId, 
-      `${title}\n\n${item.content}`,
-      token
-    );
-  }
-
-  await sendMessage(chatId, getUserText('choose_action'), token, {
-    reply_markup: {
-      keyboard: [
-        [getUserText('search_button')],
-        [getUserText('back_to_menu')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-// ====================================================================
-// ========== دوال إدارة المحتوى ==========
-// ====================================================================
-
-async function showContentManagement(chatId, token) {
-  const totalItems = Object.keys(contentSystem.items).length;
-
-  const message = getAdminText('content_management', { total: totalItems });
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['📦 عرض الكل', '✏️ تعديل محتوى'],
-        ['🗑️ حذف محتوى', getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function showAllContent(chatId, token) {
-  const items = Object.values(contentSystem.items);
+  // تطبيق حماية المحتوى
+  const protection = contentProtection;
+  let content = item.content;
   
-  if (items.length === 0) {
-    await sendMessage(chatId, getAdminText('no_content_list'), token);
-    return;
-  }
-
-  let message = getAdminText('content_list');
-  for (const item of items) {
-    const typeIcon = item.type === 'image' ? '🖼️' : item.type === 'video' ? '🎬' : '📝';
-    const count = item.mediaItems ? item.mediaItems.length : (item.type === 'text' ? 1 : 1);
-    message += `${typeIcon} ${item.id} - ${item.title} (${count} عنصر)\n`;
-    message += `📅 ${item.date}\n─────────────────\n`;
-  }
-
-  if (message.length > 4000) {
-    const parts = message.match(/[\s\S]{1,4000}/g) || [];
-    for (const part of parts) {
-      await sendMessage(chatId, part, token);
-    }
-  } else {
-    await sendMessage(chatId, message, token);
-  }
-}
-
-async function showDeleteContentMenu(chatId, token) {
-  const items = Object.values(contentSystem.items);
-  
-  if (items.length === 0) {
-    await sendMessage(chatId, getAdminText('no_content_delete'), token);
-    return;
-  }
-
-  const buttons = items.map(item => [
-    { text: `🗑️ ${item.id} - ${item.title}`, callback_data: `delete_content_${item.id}` }
-  ]);
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, getAdminText('delete_prompt'), token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function showEditContentMenu(chatId, token) {
-  const items = Object.values(contentSystem.items);
-  
-  if (items.length === 0) {
-    await sendMessage(chatId, getAdminText('no_content_edit'), token);
-    return;
-  }
-
-  const buttons = items.map(item => [
-    { text: `✏️ ${item.id} - ${item.title}`, callback_data: `edit_content_${item.id}` }
-  ]);
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_content_back' }]);
-
-  await sendMessage(chatId, getAdminText('edit_prompt'), token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-// ====================================================================
-// ========== دوال إدارة الطلبات ==========
-// ====================================================================
-
-async function showRequestsManagement(chatId, token) {
-  const pendingCount = Object.keys(pendingUsers).length;
-  const rejectedCount = Object.keys(rejectedUsers).length;
-  
-  const message = getAdminText('requests_management', {
-    pending: pendingCount,
-    rejected: rejectedCount
-  });
-
-  const buttons = [
-    [{ text: `📋 الطلبات المعلقة (${pendingCount})`, callback_data: 'show_pending' }],
-    [{ text: `❌ المرفوضين (${rejectedCount})`, callback_data: 'show_rejected' }],
-    [{ text: `✅ المعتمدين (${Object.keys(approvedUsers).length})`, callback_data: 'show_approved' }],
-    [{ text: getAdminText('back'), callback_data: 'admin_back' }]
-  ];
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-// ====================================================================
-// ========== دوال الاشتراك الإجباري ==========
-// ====================================================================
-
-async function showSubscriptionManagement(chatId, token) {
-  const status = mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل';
-  const channels = mandatorySubscription.channels.length > 0 
-    ? mandatorySubscription.channels.join('\n• ') 
-    : 'لا يوجد';
-  const groups = mandatorySubscription.groups.length > 0 
-    ? mandatorySubscription.groups.join('\n• ') 
-    : 'لا يوجد';
-
-  const message = getAdminText('subscription_management', {
-    status,
-    channels,
-    groups
-  });
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['➕ إضافة قناة', '➕ إضافة مجموعة'],
-        ['🗑️ حذف قناة', '🗑️ حذف مجموعة'],
-        ['🔄 تفعيل/تعطيل', getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-async function showDeleteSubscriptionMenu(chatId, token) {
-  const allSubs = [
-    ...mandatorySubscription.channels.map(c => ({ type: 'قناة', id: c })),
-    ...mandatorySubscription.groups.map(g => ({ type: 'مجموعة', id: g }))
-  ];
-
-  if (allSubs.length === 0) {
-    await sendMessage(chatId, getAdminText('no_subscriptions'), token);
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  const buttons = allSubs.map(sub => [
-    { text: `🗑️ ${sub.type}: ${sub.id}`, callback_data: `delete_sub_${sub.type}_${sub.id}` }
-  ]);
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_subscription_back' }]);
-
-  await sendMessage(chatId, getAdminText('delete_sub_prompt'), token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-// ====================================================================
-// ========== دوال إعدادات البوت ==========
-// ====================================================================
-
-async function showBotSettings(chatId, token) {
-  const message = getAdminText('bot_settings', {
-    about: botSettings.aboutText,
-    logChannel: botSettings.logChannel
-  });
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: {
-      keyboard: [
-        ['✏️ تعديل نص عن البوت'],
-        [getAdminText('back')]
-      ],
-      resize_keyboard: true
-    }
-  });
-}
-
-// ====================================================================
-// ========== دوال إحصائيات ==========
-// ====================================================================
-
-async function showStatistics(chatId, token) {
-  const stats = getAdminText('statistics', {
-    approved: Object.keys(approvedUsers).length,
-    pending: Object.keys(pendingUsers).length,
-    rejected: Object.keys(rejectedUsers).length,
-    total: Object.keys(contentSystem.items).length,
-    images: Object.values(contentSystem.items).filter(i => i.type === 'image').length,
-    videos: Object.values(contentSystem.items).filter(i => i.type === 'video').length,
-    texts: Object.values(contentSystem.items).filter(i => i.type === 'text').length,
-    channels: mandatorySubscription.channels.length,
-    groups: mandatorySubscription.groups.length,
-    subStatus: mandatorySubscription.enabled ? '🟢 مفعل' : '🔴 معطل',
-    logChannel: botSettings.logChannel,
-    time: new Date().toLocaleString('ar-EG')
-  });
-
-  await sendMessage(chatId, stats, token, {
-    reply_markup: { keyboard: [[getAdminText('back')]], resize_keyboard: true }
-  });
-}
-
-// ====================================================================
-// ========== معالجة الكولباك ==========
-// ====================================================================
-
-async function handleAdminCallback(data, chatId, messageId, token, env) {
-  if (data === 'admin_back') {
-    await showAdminMainMenu(chatId, token);
-    return;
-  }
-
-  if (data === 'admin_content_back') {
-    await showContentManagement(chatId, token);
-    return;
-  }
-
-  if (data === 'admin_subscription_back') {
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  if (data === 'show_pending') {
-    await showPendingRequests(chatId, token);
-    return;
-  }
-
-  if (data === 'show_rejected') {
-    await showRejectedRequests(chatId, token);
-    return;
-  }
-
-  if (data === 'show_approved') {
-    await showApprovedUsers(chatId, token);
-    return;
-  }
-
-  // ===== إدارة النصوص =====
-  if (data.startsWith('edit_text_')) {
-    const parts = data.split('_');
-    const category = parts[2];
-    const key = parts.slice(3).join('_');
-    await handleEditText(chatId, category, key, token);
-    return;
-  }
-
-  // ===== حذف اشتراك =====
-  if (data.startsWith('delete_sub_')) {
-    const parts = data.split('_');
-    const type = parts[2];
-    const id = parts.slice(3).join('_');
-    
-    if (type === 'قناة') {
-      const index = mandatorySubscription.channels.indexOf(id);
-      if (index !== -1) {
-        mandatorySubscription.channels.splice(index, 1);
-        await saveSubscriptionToKV(env);
-        await sendMessage(chatId, getAdminText('sub_deleted', { type: 'القناة', id }), token);
-      }
-    } else if (type === 'مجموعة') {
-      const index = mandatorySubscription.groups.indexOf(id);
-      if (index !== -1) {
-        mandatorySubscription.groups.splice(index, 1);
-        await saveSubscriptionToKV(env);
-        await sendMessage(chatId, getAdminText('sub_deleted', { type: 'المجموعة', id }), token);
-      }
-    }
-    await showSubscriptionManagement(chatId, token);
-    return;
-  }
-
-  // ===== حذف محتوى =====
-  if (data.startsWith('delete_content_')) {
-    const contentId = data.replace('delete_content_', '');
-    
-    if (contentSystem.items[contentId]) {
-      delete contentSystem.items[contentId];
-      await saveContentToKV(env);
-      await sendMessage(chatId, getAdminText('content_deleted', { id: contentId }), token);
-      await showContentManagement(chatId, token);
+  if (protection.enabled) {
+    // حماية المحتوى
+    if (protection.excludeMedia && (item.type === 'image' || item.type === 'video')) {
+      // استثناء الميديا
+    } else if (protection.excludeLinks && content.includes('http')) {
+      // استثناء الروابط
+    } else if (protection.excludeText && item.type === 'text') {
+      // استثناء النصوص
     } else {
-      await sendMessage(chatId, getAdminText('content_not_found', { id: contentId }), token);
+      // تطبيق الحماية (إضافة علامات مائية أو تحذيرات)
+      content = `🔒 **محتوى محمي**\n\n${content}`;
     }
-    return;
   }
 
-  // ===== تعديل محتوى =====
-  if (data.startsWith('edit_content_')) {
-    const contentId = data.replace('edit_content_', '');
-    const item = contentSystem.items[contentId];
-    
-    if (!item) {
-      await sendMessage(chatId, getAdminText('content_not_found', { id: contentId }), token);
-      return;
-    }
-
-    adminState.currentAction = 'edit_content';
-    adminState.step = 'waiting_new_title';
-    adminState.tempData.contentId = contentId;
-    
-    await sendMessage(chatId, 
-      getAdminText('edit_title_prompt', { id: contentId, title: item.title }),
-      token,
-      { 
-        reply_markup: { 
-          keyboard: [[getAdminText('cancel')]], 
-          resize_keyboard: true 
-        }
-      }
-    );
-    return;
-  }
-
-  // ===== قبول/رفض الطلبات =====
-  if (data.startsWith('approve_')) {
-    const targetId = data.split('_')[1];
-    if (pendingUsers[targetId]) {
-      approvedUsers[targetId] = pendingUsers[targetId];
-      delete pendingUsers[targetId];
-      delete rejectedUsers[targetId];
-      await saveUsersToKV(env);
-      
-      const username = pendingUsers[targetId]?.username || null;
-      await logUserAction(targetId, username, '✅ موافقة', 'تمت الموافقة على طلب الانضمام', token);
-      
-      await sendMessage(targetId, getUserText('approved'), token, {
-        reply_markup: { remove_keyboard: true }
-      });
-      await sendMessage(chatId, getAdminText('approved_user'), token);
-      await showRequestsManagement(chatId, token);
-    }
-    return;
-  }
-
-  if (data.startsWith('reject_')) {
-    const targetId = data.split('_')[1];
-    if (pendingUsers[targetId]) {
-      rejectedUsers[targetId] = pendingUsers[targetId];
-      delete pendingUsers[targetId];
-      delete approvedUsers[targetId];
-      await saveUsersToKV(env);
-      
-      const username = pendingUsers[targetId]?.username || null;
-      await logUserAction(targetId, username, '❌ رفض', 'تم رفض طلب الانضمام', token);
-      
-      await sendMessage(targetId, getUserText('rejected'), token, {
-        reply_markup: { remove_keyboard: true }
-      });
-      await sendMessage(chatId, getAdminText('rejected_user'), token);
-      await showRequestsManagement(chatId, token);
-    }
-    return;
-  }
-
-  if (data.startsWith('reapprove_')) {
-    const targetId = data.split('_')[1];
-    if (rejectedUsers[targetId]) {
-      approvedUsers[targetId] = rejectedUsers[targetId];
-      delete rejectedUsers[targetId];
-      delete pendingUsers[targetId];
-      await saveUsersToKV(env);
-      
-      const username = rejectedUsers[targetId]?.username || null;
-      await logUserAction(targetId, username, '✅ إعادة موافقة', 'تم إعادة الموافقة على الطلب', token);
-      
-      await sendMessage(targetId, getUserText('reapproved'), token, {
-        reply_markup: { remove_keyboard: true }
-      });
-      await sendMessage(chatId, getAdminText('reapproved_user'), token);
-      await showRequestsManagement(chatId, token);
-    }
-    return;
-  }
-
-  if (data.startsWith('details_')) {
-    const targetId = data.split('_')[1];
-    let userInfo = pendingUsers[targetId] || rejectedUsers[targetId] || approvedUsers[targetId];
-    
-    if (userInfo) {
-      const status = pendingUsers[targetId] ? '⏳ معلق' : 
-                    rejectedUsers[targetId] ? '❌ مرفوض' : '✅ معتمد';
-      
-      const details = getAdminText('user_details', {
-        name: userInfo.name,
-        username: userInfo.username,
-        phone: userInfo.phone,
-        time: userInfo.time,
-        status
-      });
-      
-      await sendMessage(chatId, details, token);
-    }
-    return;
-  }
-
-  if (data.startsWith('delete_user_')) {
-    const targetId = data.split('_')[2];
-    if (rejectedUsers[targetId]) {
-      delete rejectedUsers[targetId];
-      await saveUsersToKV(env);
-      await sendMessage(chatId, getAdminText('user_deleted'), token);
-      await showRequestsManagement(chatId, token);
-    }
-    return;
-  }
-}
-
-// ====================================================================
-// ========== عرض القوائم ==========
-// ====================================================================
-
-async function showPendingRequests(chatId, token) {
-  const pendingList = Object.values(pendingUsers);
-  if (pendingList.length === 0) {
-    await sendMessage(chatId, getAdminText('no_pending'), token, {
-      reply_markup: { inline_keyboard: [[{ text: getAdminText('back'), callback_data: 'admin_back' }]] }
-    });
-    return;
-  }
-
-  let message = getAdminText('pending_list');
-  const buttons = [];
-  
-  for (const user of pendingList) {
-    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
-    buttons.push([
-      { text: `✅ قبول`, callback_data: `approve_${user.id}` },
-      { text: `❌ رفض`, callback_data: `reject_${user.id}` }
-    ]);
-    buttons.push([
-      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
-    ]);
-  }
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_back' }]);
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function showRejectedRequests(chatId, token) {
-  const rejectedList = Object.values(rejectedUsers);
-  if (rejectedList.length === 0) {
-    await sendMessage(chatId, getAdminText('no_rejected'), token, {
-      reply_markup: { inline_keyboard: [[{ text: getAdminText('back'), callback_data: 'admin_back' }]] }
-    });
-    return;
-  }
-
-  let message = getAdminText('rejected_list');
-  const buttons = [];
-  
-  for (const user of rejectedList) {
-    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
-    buttons.push([
-      { text: `✅ إعادة موافقة`, callback_data: `reapprove_${user.id}` },
-      { text: `🗑️ حذف`, callback_data: `delete_user_${user.id}` }
-    ]);
-    buttons.push([
-      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
-    ]);
-  }
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_back' }]);
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-async function showApprovedUsers(chatId, token) {
-  const approvedList = Object.values(approvedUsers);
-  if (approvedList.length === 0) {
-    await sendMessage(chatId, getAdminText('no_approved'), token, {
-      reply_markup: { inline_keyboard: [[{ text: getAdminText('back'), callback_data: 'admin_back' }]] }
-    });
-    return;
-  }
-
-  let message = getAdminText('approved_list');
-  const buttons = [];
-  
-  for (const user of approvedList.slice(0, 10)) {
-    message += `👤 ${user.name}\n🆔 @${user.username}\n─────────────────\n`;
-    buttons.push([
-      { text: `📋 تفاصيل`, callback_data: `details_${user.id}` }
-    ]);
-  }
-  
-  if (approvedList.length > 10) {
-    message += `\n⚠️ يوجد ${approvedList.length - 10} معتمدين آخرين...`;
-  }
-  
-  buttons.push([{ text: getAdminText('back'), callback_data: 'admin_back' }]);
-
-  await sendMessage(chatId, message, token, {
-    reply_markup: { inline_keyboard: buttons }
-  });
-}
-
-// ====================================================================
-// ========== دوال مساعدة ==========
-// ====================================================================
-
-function generateContentId() {
-  return String(Math.floor(10000 + Math.random() * 90000));
-}
-
-async function getBotInfo(token) {
-  const url = `https://api.telegram.org/bot${token}/getMe`;
-  try {
-    const response = await fetch(url);
-    const data = await response.json();
-    return data.result || { username: 'bot' };
-  } catch (error) {
-    return { username: 'bot' };
-  }
-}
-
-async function sendMessage(chatId, text, token, options = {}) {
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const payload = { chat_id: chatId, text: text, parse_mode: 'HTML', ...options };
-
-  try {
-    console.log(`📤 إرسال رسالة إلى: ${chatId}`);
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-    console.log('📥 نتيجة الإرسال:', data.ok ? '✅ نجاح' : '❌ فشل');
-    if (!data.ok) {
-      console.log('❌ سبب الفشل:', data.description);
-    }
-    return data;
-  } catch (error) {
-    console.error('❌ خطأ في إرسال الرسالة:', error);
-    return { ok: false, error: error.message };
-  }
-}
-
-async function answerCallbackQuery(callbackId, text, token) {
-  const url = `https://api.telegram.org/bot${token}/answerCallbackQuery`;
-  try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callback_query_id: callbackId, text: text })
-    });
-  } catch (error) {
-    console.error('Error answering callback:', error);
+  // إرسال المحتوى
+  if (item.fileId && (item.type === 'video' || item.type === 'animation')) {
+    await sendVideo(chatId, item.fileId, content, token);
+  } else if (item.fileId && item.type === 'image') {
+    await sendPhoto(chatId, item.fileId, content, token);
+  } else {
+    await sendMessage(chatId, content, token);
   }
 }
 
@@ -1979,69 +792,329 @@ async function answerCallbackQuery(callbackId, text, token) {
 
 async function sendVideo(chatId, fileId, caption, token) {
   const url = `https://api.telegram.org/bot${token}/sendVideo`;
-  
-  const payload = {
-    chat_id: chatId,
-    video: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
-
+  const payload = { chat_id: chatId, video: fileId, caption: caption, parse_mode: 'Markdown' };
   try {
-    const response = await fetch(url, {
+    await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    return await response.json();
   } catch (error) {
     console.error('Error sending video:', error);
-    await sendMessage(chatId, getUserText('video_error'), token);
   }
 }
 
 async function sendPhoto(chatId, fileId, caption, token) {
   const url = `https://api.telegram.org/bot${token}/sendPhoto`;
-  
-  const payload = {
-    chat_id: chatId,
-    photo: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
-
+  const payload = { chat_id: chatId, photo: fileId, caption: caption, parse_mode: 'Markdown' };
   try {
-    const response = await fetch(url, {
+    await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    return await response.json();
   } catch (error) {
     console.error('Error sending photo:', error);
-    await sendMessage(chatId, getUserText('photo_error'), token);
   }
 }
 
-async function sendDocument(chatId, fileId, caption, token) {
-  const url = `https://api.telegram.org/bot${token}/sendDocument`;
-  
-  const payload = {
-    chat_id: chatId,
-    document: fileId,
-    caption: caption || '',
-    parse_mode: 'HTML'
-  };
+// ====================================================================
+// ========== معالجة كولباك الأدمن ==========
+// ====================================================================
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+async function handleAdminCallback(data, chatId, messageId, token, env) {
+  // ===== القائمة الرئيسية =====
+  if (data === 'admin_back') {
+    const menu = getAdminMainMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'admin_settings') {
+    const menu = getSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'settings_back') {
+    const menu = getSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== عمل البوت =====
+  if (data === 'settings_bot') {
+    const menu = getBotSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'bot_toggle') {
+    botSettings.isActive = !botSettings.isActive;
+    await saveAllData(env);
+    const menu = getBotSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await answerCallbackQuery(messageId, `✅ تم ${botSettings.isActive ? 'تشغيل' : 'إيقاف'} البوت`, token);
+    return;
+  }
+
+  if (data === 'bot_stop_message') {
+    adminState.currentAction = 'edit_stop_message';
+    adminState.step = 'waiting_input';
+    adminState.tempData = { chatId, messageId };
+    await sendMessage(chatId, `📝 أدخل رسالة الإيقاف الجديدة:\n\nالحالية: ${botSettings.stopMessage}`, token, {
+      reply_markup: {
+        keyboard: [[{ text: '🔙 إلغاء', callback_data: 'cancel' }]],
+        resize_keyboard: true
+      }
     });
-    return await response.json();
-  } catch (error) {
-    console.error('Error sending document:', error);
-    await sendMessage(chatId, getUserText('document_error'), token);
+    return;
+  }
+
+  if (data === 'bot_change_link') {
+    const newLink = `https://t.me/teeeesrydtbot?start=${Date.now()}`;
+    botSettings.botLink = newLink;
+    await saveAllData(env);
+    const menu = getBotSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, `✅ تم تغيير الرابط:\n${newLink}`, token);
+    return;
+  }
+
+  if (data === 'bot_clear_users') {
+    approvedUsers = {};
+    rejectedUsers = {};
+    pendingUsers = {};
+    await saveAllData(env);
+    const menu = getBotSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '🗑️ تم مسح جميع المستخدمين', token);
+    return;
+  }
+
+  // ===== التحقق =====
+  if (data === 'settings_verification') {
+    const menu = getVerificationMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_back') {
+    const menu = getVerificationMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_toggle') {
+    verificationSystem.enabled = !verificationSystem.enabled;
+    await saveAllData(env);
+    const menu = getVerificationMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_type') {
+    const menu = getVerificationTypeMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_type_phone') {
+    verificationSystem.type = 'phone';
+    await saveAllData(env);
+    const menu = getVerificationTypeMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_type_math') {
+    verificationSystem.type = 'math';
+    await saveAllData(env);
+    const menu = getVerificationTypeMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_type_admin') {
+    verificationSystem.type = 'admin';
+    await saveAllData(env);
+    const menu = getVerificationTypeMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_messages') {
+    const menu = getVerificationMessagesMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_msg_request' || data === 'verif_msg_success' || data === 'verif_msg_fail') {
+    const key = data === 'verif_msg_request' ? 'request' : data === 'verif_msg_success' ? 'success' : 'fail';
+    adminState.currentAction = 'edit_verif_message';
+    adminState.step = 'waiting_input';
+    adminState.tempData = { chatId, messageId, key };
+    await sendMessage(chatId, `📝 أدخل رسالة ${key === 'request' ? 'الطلب' : key === 'success' ? 'النجاح' : 'الفشل'} الجديدة:\n\nالحالية: ${verificationSystem.messages[key]}`, token, {
+      reply_markup: {
+        keyboard: [[{ text: '🔙 إلغاء', callback_data: 'cancel' }]],
+        resize_keyboard: true
+      }
+    });
+    return;
+  }
+
+  if (data === 'verif_users') {
+    const menu = getVerifiedUsersMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_user_clear') {
+    verificationSystem.verifiedUsers = {};
+    await saveAllData(env);
+    const menu = getVerifiedUsersMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'verif_user_add' || data === 'verif_user_remove') {
+    const action = data === 'verif_user_add' ? 'add' : 'remove';
+    adminState.currentAction = `verif_user_${action}`;
+    adminState.step = 'waiting_input';
+    adminState.tempData = { chatId, messageId };
+    await sendMessage(chatId, `📝 أرسل ${action === 'add' ? 'ID أو اسم المستخدم للإضافة' : 'ID أو اسم المستخدم للحذف'}:`, token, {
+      reply_markup: {
+        keyboard: [[{ text: '🔙 إلغاء', callback_data: 'cancel' }]],
+        resize_keyboard: true
+      }
+    });
+    return;
+  }
+
+  // ===== حماية المحتوى =====
+  if (data === 'settings_protection') {
+    const menu = getProtectionMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'protect_toggle') {
+    contentProtection.enabled = !contentProtection.enabled;
+    await saveAllData(env);
+    const menu = getProtectionMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'protect_media') {
+    contentProtection.excludeMedia = !contentProtection.excludeMedia;
+    await saveAllData(env);
+    const menu = getProtectionMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'protect_links') {
+    contentProtection.excludeLinks = !contentProtection.excludeLinks;
+    await saveAllData(env);
+    const menu = getProtectionMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'protect_text') {
+    contentProtection.excludeText = !contentProtection.excludeText;
+    await saveAllData(env);
+    const menu = getProtectionMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== الإشعارات =====
+  if (data === 'settings_notifications') {
+    const menu = getNotificationsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'notif_join') {
+    notificationSettings.joinNotification = !notificationSettings.joinNotification;
+    await saveAllData(env);
+    const menu = getNotificationsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  if (data === 'notif_ban') {
+    notificationSettings.banNotification = !notificationSettings.banNotification;
+    await saveAllData(env);
+    const menu = getNotificationsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== إلغاء =====
+  if (data === 'cancel') {
+    adminState.currentAction = null;
+    adminState.step = null;
+    adminState.tempData = {};
+    await showAdminMainMenu(chatId, token);
+    return;
+  }
+
+  // ===== معالجة الإدخالات النصية =====
+  if (adminState.currentAction === 'edit_stop_message' && adminState.step === 'waiting_input') {
+    botSettings.stopMessage = data;
+    await saveAllData(env);
+    adminState.currentAction = null;
+    adminState.step = null;
+    const menu = getBotSettingsMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث رسالة الإيقاف', token);
+    return;
+  }
+
+  if (adminState.currentAction === 'edit_verif_message' && adminState.step === 'waiting_input') {
+    const key = adminState.tempData.key;
+    verificationSystem.messages[key] = data;
+    await saveAllData(env);
+    adminState.currentAction = null;
+    adminState.step = null;
+    const menu = getVerificationMessagesMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, `✅ تم تحديث رسالة ${key}`, token);
+    return;
+  }
+
+  if (adminState.currentAction === 'verif_user_add' && adminState.step === 'waiting_input') {
+    const userId = data;
+    verificationSystem.verifiedUsers[userId] = { name: userId, verifiedAt: new Date().toISOString() };
+    await saveAllData(env);
+    adminState.currentAction = null;
+    adminState.step = null;
+    const menu = getVerifiedUsersMenu();
+    await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, `✅ تم إضافة المستخدم ${userId}`, token);
+    return;
+  }
+
+  if (adminState.currentAction === 'verif_user_remove' && adminState.step === 'waiting_input') {
+    const userId = data;
+    if (verificationSystem.verifiedUsers[userId]) {
+      delete verificationSystem.verifiedUsers[userId];
+      await saveAllData(env);
+      const menu = getVerifiedUsersMenu();
+      await editMessage(chatId, messageId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, `✅ تم حذف المستخدم ${userId}`, token);
+    } else {
+      await sendMessage(chatId, `❌ المستخدم ${userId} غير موجود`, token);
+    }
+    adminState.currentAction = null;
+    adminState.step = null;
+    return;
   }
 }
+
+// أضف بقية الدوال (إدارة الطلبات، إدارة المحتوى، إلخ) من الكود السابق
+
+console.log('✅ Bot is ready!');
