@@ -145,6 +145,82 @@ async function telegramRequest(method, token, payload) {
   }
 }
 
+// رفع فيديو binary عبر multipart/form-data (احتياطي عند رفض Telegram للرابط المباشر)
+async function telegramUploadVideo(chatId, videoBlob, caption, token, extra) {
+  const url = `https://api.telegram.org/bot${token}/sendVideo`;
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("parse_mode", "HTML");
+  form.append("caption", caption || "");
+  form.append("video", videoBlob, "video.mp4");
+  if (extra?.reply_markup) form.append("reply_markup", JSON.stringify(extra.reply_markup));
+  if (data.protection.enabled && !extra?.bypass_protection) form.append("protect_content", "true");
+  try {
+    const res = await fetch(url, { method: "POST", body: form });
+    return await res.json();
+  } catch (e) {
+    console.error("telegramUploadVideo error:", e);
+    return { ok: false, description: e.message };
+  }
+}
+
+// كشف روابط تويتر/X
+function isTwitterUrl(text) {
+  return /https?:\/\/(www\.)?(twitter\.com|x\.com)\/[^/]+\/status\/\d+/i.test(text.trim());
+}
+
+// جلب رابط فيديو مباشر من تويتر/X عبر vxtwitter
+async function fetchTwitterVideoUrl(tweetUrl) {
+  try {
+    const match = tweetUrl.trim().match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/i);
+    if (!match) return null;
+    const tweetId = match[1];
+    const res = await fetch(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
+      headers: { "User-Agent": "TelegramBot/1.0" },
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    // json.media_extended أو json.mediaURLs
+    const mediaUrls = json.mediaURLs || [];
+    const extended = json.media_extended || [];
+    // نُفضّل أعلى جودة — آخر عنصر في extended (عادةً الأعلى)
+    const videoFromExtended = extended
+      .filter((m) => m.type === "video")
+      .map((m) => m.url)
+      .pop();
+    const videoFromUrls = mediaUrls.find((u) => u.includes(".mp4") || u.includes("video"));
+    return videoFromExtended || videoFromUrls || null;
+  } catch (e) {
+    console.error("fetchTwitterVideoUrl error:", e);
+    return null;
+  }
+}
+
+// جلب فيديو تويتر ورفعه لتيليجرام — يُعيد file_id حقيقي من تيليجرام أو null
+async function sendTwitterVideo(chatId, tweetUrl, caption, token, extra) {
+  const directUrl = await fetchTwitterVideoUrl(tweetUrl);
+  if (!directUrl) return null;
+
+  // المحاولة 1: تمرير الرابط مباشرةً لتيليجرام
+  const r1 = await sendVideo(chatId, directUrl, caption, token, extra);
+  const fid1 = r1?.result?.video?.file_id;
+  if (r1?.ok && fid1) return fid1;
+
+  // المحاولة 2: تحميل الفيديو ورفعه عبر multipart/form-data
+  try {
+    const videoRes = await fetch(directUrl, { headers: { "User-Agent": "TelegramBot/1.0" } });
+    if (!videoRes.ok) return null;
+    const blob = await videoRes.blob();
+    const r2 = await telegramUploadVideo(chatId, blob, caption, token, extra);
+    const fid2 = r2?.result?.video?.file_id;
+    if (r2?.ok && fid2) return fid2;
+  } catch (e) {
+    console.error("sendTwitterVideo download error:", e);
+  }
+  // كلتا المحاولتان فشلتا أو لم يُعيدا file_id صحيحاً
+  return null;
+}
+
 function buildBasePayload(chatId, extra) {
   const payload = {
     chat_id: chatId,
@@ -1227,21 +1303,25 @@ https://t.me/${bot}?start=share_${item.id}`;
 async function deliverContent(chatId, contentId, token) {
   const item = data.content?.items?.[contentId];
   if (!item || !item.parts || item.parts.length === 0) {
-    await sendMessage(chatId, `❌ لم يتم العثور على محتوى بالرقم <code>${contentId}</code>.`, token);
+    await sendMessage(chatId, `❌ لم يتم العثور على محتوى بالرقم <code>${contentId}</code>.`, token, {
+      reply_markup: getUserKeyboard(),
+    });
     return false;
   }
-  await sendMessage(chatId, `📦 <b>${item.title}</b>\n🔢 <code>${item.id}</code>`, token, {
-    reply_markup: getUserKeyboard(),
-  });
-  for (const part of item.parts) {
+  const kb = { reply_markup: getUserKeyboard() };
+  await sendMessage(chatId, `📦 <b>${item.title}</b>\n🔢 <code>${item.id}</code>`, token, kb);
+  for (let i = 0; i < item.parts.length; i++) {
+    const part = item.parts[i];
+    // على آخر جزء أو إذا كان هناك جزء واحد فقط — نُبقي الكيبورد دائماً
+    const extra = kb;
     if (part.type === "text") {
-      await sendMessage(chatId, part.content, token);
+      await sendMessage(chatId, part.content, token, extra);
     } else if (part.type === "photo") {
-      await sendPhoto(chatId, part.fileId, part.caption || "", token);
+      await sendPhoto(chatId, part.fileId, part.caption || "", token, extra);
     } else if (part.type === "video") {
-      await sendVideo(chatId, part.fileId, part.caption || "", token);
+      await sendVideo(chatId, part.fileId, part.caption || "", token, extra);
     }
-    await new Promise((r) => setTimeout(r, 400));
+    if (i < item.parts.length - 1) await new Promise((r) => setTimeout(r, 400));
   }
   return true;
 }
@@ -2381,8 +2461,22 @@ async function handleAdminInput(userId, chatId, msg, token, env) {
     let added = false;
 
     if (msg.text && !msg.text.startsWith("/")) {
-      state.temp.parts.push({ type: "text", content: msg.text });
-      added = true;
+      // كشف رابط تويتر/X
+      if (isTwitterUrl(msg.text)) {
+        await sendMessage(chatId, "⏳ جارٍ جلب الفيديو من تويتر/X...", token);
+        const fileId = await sendTwitterVideo(chatId, msg.text, "", token);
+        if (!fileId) {
+          await sendMessage(chatId, "❌ لم أتمكن من جلب الفيديو. تأكد أن التغريدة تحتوي فيديو والرابط صحيح.", token, {
+            reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "cnt_part_cancel" }]] },
+          });
+          return true;
+        }
+        state.temp.parts.push({ type: "video", fileId, caption: "" });
+        added = true;
+      } else {
+        state.temp.parts.push({ type: "text", content: msg.text });
+        added = true;
+      }
     } else if (msg.photo) {
       const fileId = msg.photo[msg.photo.length - 1].file_id;
       state.temp.parts.push({ type: "photo", fileId, caption: msg.caption || "" });
@@ -2393,7 +2487,7 @@ async function handleAdminInput(userId, chatId, msg, token, env) {
     }
 
     if (!added) {
-      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، أو فيديو.", token);
+      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، فيديو، أو رابط تويتر/X.", token);
       return true;
     }
 
@@ -2421,8 +2515,19 @@ async function handleAdminInput(userId, chatId, msg, token, env) {
 
     let added = false;
     if (msg.text && !msg.text.startsWith("/")) {
-      item.parts.push({ type: "text", content: msg.text });
-      added = true;
+      if (isTwitterUrl(msg.text)) {
+        await sendMessage(chatId, "⏳ جارٍ جلب الفيديو من تويتر/X...", token);
+        const fileId = await sendTwitterVideo(chatId, msg.text, "", token);
+        if (!fileId) {
+          await sendMessage(chatId, "❌ لم أتمكن من جلب الفيديو. تأكد أن التغريدة تحتوي فيديو والرابط صحيح.", token);
+          return true;
+        }
+        item.parts.push({ type: "video", fileId, caption: "" });
+        added = true;
+      } else {
+        item.parts.push({ type: "text", content: msg.text });
+        added = true;
+      }
     } else if (msg.photo) {
       item.parts.push({ type: "photo", fileId: msg.photo[msg.photo.length - 1].file_id, caption: msg.caption || "" });
       added = true;
@@ -2432,7 +2537,7 @@ async function handleAdminInput(userId, chatId, msg, token, env) {
     }
 
     if (!added) {
-      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، أو فيديو.", token);
+      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، فيديو، أو رابط تويتر/X.", token);
       return true;
     }
     await saveData(env);
