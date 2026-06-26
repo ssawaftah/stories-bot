@@ -10,6 +10,7 @@ let data = {
   verification: {
     enabled: false,
     channelId: null,
+    channelName: null,
     requestMessage: '🔐 يرجى مشاركة رقم هاتفك للتحقق:',
     buttonText: '📱 مشاركة الرقم',
     successMessage: '✅ تم التحقق بنجاح!',
@@ -23,7 +24,8 @@ let data = {
   },
   notifications: {
     enabled: false,
-    channelId: null
+    channelId: null,
+    channelName: null
   },
   welcome: {
     text: '🎉 مرحباً بك في البوت!'
@@ -62,7 +64,7 @@ async function sendMessage(chatId, text, token, extra) {
     return await res.json();
   } catch (e) {
     console.error('Send error:', e);
-    return { ok: false };
+    return { ok: false, description: e.message };
   }
 }
 
@@ -93,6 +95,28 @@ async function answerCallback(cbId, text, token) {
     });
   } catch (e) {
     console.error('Callback error:', e);
+  }
+}
+
+async function getChatInfo(chatId, token) {
+  const url = 'https://api.telegram.org/bot' + token + '/getChat';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId })
+    });
+    const result = await res.json();
+    if (result.ok && result.result) {
+      return {
+        name: result.result.title || result.result.username || chatId,
+        type: result.result.type
+      };
+    }
+    return null;
+  } catch (e) {
+    console.error('Error getting chat info:', e);
+    return null;
   }
 }
 
@@ -184,17 +208,26 @@ function adminMenu() {
 function settingsMenu() {
   const botStatus = data.settings.botActive ? '🟩 البوت يعمل' : '🟥 البوت متوقف';
   const verStatus = data.verification.enabled ? '🟩 التحقق من العضوية نشط' : '🟥 التحقق من العضوية متوقف';
+  const verChannel = data.verification.channelName || data.verification.channelId || 'غير محدد';
   const protectStatus = data.protection.enabled ? '🔒 الحماية مفعلة' : '🔓 الحماية معطلة';
   const notifStatus = data.notifications.enabled ? '🔔 الإشعارات مفعلة' : '🔕 الإشعارات معطلة';
+  const notifChannel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
   
   return {
-    text: '⚙️ **الإعدادات**\n\nاختر القسم:',
+    text: '⚙️ **الإعدادات**\n\n' +
+          '🤖 **حالة البوت:** ' + botStatus + '\n' +
+          '✅ **التحقق:** ' + verStatus + '\n' +
+          '📢 **قناة التحقق:** ' + verChannel + '\n' +
+          '🔒 **حماية المحتوى:** ' + protectStatus + '\n' +
+          '🔔 **الإشعارات:** ' + notifStatus + '\n' +
+          '📢 **قناة الإشعارات:** ' + notifChannel + '\n\n' +
+          '🔹 اختر القسم:',
     keyboard: {
       inline_keyboard: [
-        [{ text: botStatus, callback_data: 'settings_bot_toggle' }],
-        [{ text: verStatus, callback_data: 'settings_verification' }],
-        [{ text: protectStatus, callback_data: 'settings_protection' }],
-        [{ text: notifStatus, callback_data: 'settings_notifications' }],
+        [{ text: '🤖 حالة البوت', callback_data: 'settings_bot_toggle' }],
+        [{ text: '✅ التحقق من العضوية', callback_data: 'settings_verification' }],
+        [{ text: '🔒 حماية المحتوى', callback_data: 'settings_protection' }],
+        [{ text: '🔔 الإشعارات', callback_data: 'settings_notifications' }],
         [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
       ]
     }
@@ -218,7 +251,7 @@ function botSettingsMenu() {
 function verificationMenu() {
   const v = data.verification;
   const status = v.enabled ? '🟩 نشط' : '🟥 متوقف';
-  const channel = v.channelId || 'غير محدد';
+  const channel = v.channelName || v.channelId || 'غير محدد';
   
   return {
     text: '✅ **التحقق من العضوية**\n\n📌 الحالة: ' + status + '\n📢 قناة التحقق: ' + channel + '\n\n🔹 اختر الإجراء:',
@@ -284,7 +317,7 @@ function protectionMenu() {
 
 function notificationsMenu() {
   const status = data.notifications.enabled ? '🔔 مفعل' : '🔕 معطل';
-  const channel = data.notifications.channelId || 'غير محدد';
+  const channel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
   
   return {
     text: '🔔 **الإشعارات والأحداثيات**\n\n📌 الحالة: ' + status + '\n📢 القناة: ' + channel + '\n\nعند التفعيل، ستصل جميع إجراءات المستخدمين إلى القناة المحددة.',
@@ -340,7 +373,6 @@ function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
   const text = data.welcome.text;
   const buttons = [];
   
-  // إذا كان المستخدم مرفوض
   if (isRejected) {
     return {
       text: '❌ **طلبك مرفوض.**\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
@@ -348,7 +380,6 @@ function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
     };
   }
   
-  // إذا كان في انتظار التحقق
   if (isPending) {
     return {
       text: '⏳ **طلبك قيد المراجعة.**\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
@@ -356,7 +387,6 @@ function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
     };
   }
   
-  // إذا كان محقق أو التحقق معطل
   if (isVerified || !data.verification.enabled) {
     return {
       text: text + '\n\n📦 **يمكنك الآن استخدام البوت.**',
@@ -364,7 +394,6 @@ function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
     };
   }
   
-  // مستخدم جديد يحتاج للتحقق
   if (isNewUser || (!isVerified && data.verification.enabled)) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
@@ -468,7 +497,6 @@ async function handleUpdate(update, env) {
     const username = msg.from.username || 'لا يوجد';
     const name = msg.from.first_name + ' ' + (msg.from.last_name || '');
     
-    // تسجيل الإجراء للمستخدمين
     if (userId !== ADMIN && text) {
       await sendLog(userId, username, name, '📩 رسالة', 'أرسل: ' + text, token);
     }
@@ -511,24 +539,50 @@ async function handleUpdate(update, env) {
       
       // تعيين قناة التحقق
       if (adminState.action === 'set_verif_channel' && adminState.step === 'text') {
-        data.verification.channelId = text.trim();
-        adminState.action = null;
-        adminState.step = null;
-        const menu = verificationMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تعيين قناة التحقق: ' + text, token);
+        const channelId = text.trim();
+        const chatInfo = await getChatInfo(channelId, token);
+        
+        if (chatInfo) {
+          data.verification.channelId = channelId;
+          data.verification.channelName = chatInfo.name;
+          adminState.action = null;
+          adminState.step = null;
+          
+          // إرسال رسالة اختبار للقناة
+          const testMsg = '✅ **تم تعيين هذه القناة للتحقق من العضوية.**\n\nستصل طلبات التحقق الجديدة إلى هنا.';
+          await sendMessage(channelId, testMsg, token);
+          
+          const menu = verificationMenu();
+          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+          await sendMessage(chatId, '✅ **تم تعيين قناة التحقق بنجاح!**\n\n📢 **اسم القناة:** ' + chatInfo.name + '\n🆔 **المعرف:** ' + channelId, token);
+        } else {
+          await sendMessage(chatId, '❌ **فشل تعيين القناة.**\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+        }
         return;
       }
       
       // تعيين قناة الإشعارات
       if (adminState.action === 'set_notif_channel' && adminState.step === 'text') {
-        data.notifications.channelId = text.trim();
-        setLogChannel(text.trim());
-        adminState.action = null;
-        adminState.step = null;
-        const menu = notificationsMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تعيين قناة الإشعارات: ' + text, token);
+        const channelId = text.trim();
+        const chatInfo = await getChatInfo(channelId, token);
+        
+        if (chatInfo) {
+          data.notifications.channelId = channelId;
+          data.notifications.channelName = chatInfo.name;
+          setLogChannel(channelId);
+          adminState.action = null;
+          adminState.step = null;
+          
+          // إرسال رسالة اختبار للقناة
+          const testMsg = '✅ **تم تعيين هذه القناة للإشعارات.**\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
+          await sendMessage(channelId, testMsg, token);
+          
+          const menu = notificationsMenu();
+          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+          await sendMessage(chatId, '✅ **تم تعيين قناة الإشعارات بنجاح!**\n\n📢 **اسم القناة:** ' + chatInfo.name + '\n🆔 **المعرف:** ' + channelId, token);
+        } else {
+          await sendMessage(chatId, '❌ **فشل تعيين القناة.**\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+        }
         return;
       }
       
@@ -680,7 +734,16 @@ async function handleUpdate(update, env) {
             ]
           };
           
-          await sendMessage(data.verification.channelId, adminMsg, token, { reply_markup: kb });
+          const result = await sendMessage(data.verification.channelId, adminMsg, token, { reply_markup: kb });
+          
+          if (!result.ok) {
+            console.error('❌ فشل إرسال الطلب للقناة:', result.description);
+            await sendMessage(chatId, '⚠️ حدث خطأ في إرسال طلبك. يرجى المحاولة لاحقاً.', token);
+            return;
+          }
+        } else {
+          await sendMessage(chatId, '⚠️ لم يتم تعيين قناة للتحقق. يرجى التواصل مع الإدارة.', token);
+          return;
         }
         
         if (!data.verification.pendingUsers) data.verification.pendingUsers = {};
@@ -700,7 +763,6 @@ async function handleUpdate(update, env) {
     if (text === '/start') {
       await sendLog(userId, username, name, '🔄 بدء', 'ضغط على /start', token);
       
-      // التحقق من حالة المستخدم
       const isNewUser = !data.users[userId];
       const isPending = data.verification.pendingUsers && data.verification.pendingUsers[userId];
       const isVerified = data.verification.verifiedUsers && data.verification.verifiedUsers[userId];
@@ -735,7 +797,6 @@ async function handleUpdate(update, env) {
 // ====================================================================
 
 async function handleAdminCallback(cbData, chatId, msgId, token, env) {
-  // ===== رجوع =====
   if (cbData === 'admin_back') {
     const menu = adminMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -754,7 +815,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
-  // ===== الإعدادات =====
   if (cbData === 'admin_settings') {
     const menu = settingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -783,7 +843,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
-  // ===== التحقق من العضوية =====
+  // ===== التحقق =====
   if (cbData === 'settings_verification') {
     const menu = verificationMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -896,7 +956,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
-  // ===== قبول/رفض التحقق من القناة =====
+  // ===== قبول/رفض التحقق =====
   if (cbData.startsWith('verif_approve_')) {
     const targetId = cbData.replace('verif_approve_', '');
     if (data.verification.pendingUsers && data.verification.pendingUsers[targetId]) {
