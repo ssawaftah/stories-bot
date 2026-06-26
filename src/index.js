@@ -1,27 +1,20 @@
 // ====================================================================
-// ========== بوت تيليجرام - نسخة مبسطة ==========
+// ========== بوت تيليجرام - تشغيل وتخصيص فقط ==========
 // ====================================================================
 
 // ========== التخزين المؤقت ==========
-let botData = {
+let data = {
   welcome: {
     text: '🎉 مرحباً بك في البوت!\n\nاختر ما تريد:',
-    buttons: [
-      { text: '📚 عن البوت', action: 'about' },
-      { text: '🔍 بحث', action: 'search' }
-    ]
+    buttons: []
   },
-  commands: {},
-  users: {},
-  content: {}
+  commands: {}
 };
 
 const adminState = { action: null, step: null, temp: {} };
 const KV_KEYS = {
   WELCOME: 'bot_welcome',
-  COMMANDS: 'bot_commands',
-  USERS: 'bot_users',
-  CONTENT: 'bot_content'
+  COMMANDS: 'bot_commands'
 };
 
 // ====================================================================
@@ -31,16 +24,10 @@ const KV_KEYS = {
 async function loadData(env) {
   try {
     const welcome = await env.KV_NAMESPACE.get(KV_KEYS.WELCOME, 'json');
-    if (welcome) botData.welcome = welcome;
+    if (welcome) data.welcome = welcome;
     
     const commands = await env.KV_NAMESPACE.get(KV_KEYS.COMMANDS, 'json');
-    if (commands) botData.commands = commands;
-    
-    const users = await env.KV_NAMESPACE.get(KV_KEYS.USERS, 'json');
-    if (users) botData.users = users;
-    
-    const content = await env.KV_NAMESPACE.get(KV_KEYS.CONTENT, 'json');
-    if (content) botData.content = content;
+    if (commands) data.commands = commands;
     
     console.log('✅ Data loaded');
   } catch (error) {
@@ -50,10 +37,8 @@ async function loadData(env) {
 
 async function saveData(env) {
   try {
-    await env.KV_NAMESPACE.put(KV_KEYS.WELCOME, JSON.stringify(botData.welcome));
-    await env.KV_NAMESPACE.put(KV_KEYS.COMMANDS, JSON.stringify(botData.commands));
-    await env.KV_NAMESPACE.put(KV_KEYS.USERS, JSON.stringify(botData.users));
-    await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify(botData.content));
+    await env.KV_NAMESPACE.put(KV_KEYS.WELCOME, JSON.stringify(data.welcome));
+    await env.KV_NAMESPACE.put(KV_KEYS.COMMANDS, JSON.stringify(data.commands));
     console.log('✅ Data saved');
   } catch (error) {
     console.error('Error saving data:', error);
@@ -67,59 +52,35 @@ async function saveData(env) {
 async function sendMessage(chatId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
   const payload = { chat_id: chatId, text: text, parse_mode: 'Markdown' };
-  if (extra) {
-    Object.assign(payload, extra);
-  }
+  if (extra) Object.assign(payload, extra);
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     return await res.json();
-  } catch (e) {
-    console.error('Send error:', e);
-    return { ok: false };
-  }
+  } catch (e) { console.error('Send error:', e); return { ok: false }; }
 }
 
 async function editMessage(chatId, msgId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/editMessageText';
   const payload = { chat_id: chatId, message_id: msgId, text: text, parse_mode: 'Markdown' };
-  if (extra) {
-    Object.assign(payload, extra);
-  }
+  if (extra) Object.assign(payload, extra);
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     return await res.json();
-  } catch (e) {
-    console.error('Edit error:', e);
-    return { ok: false };
-  }
+  } catch (e) { console.error('Edit error:', e); return { ok: false }; }
 }
 
 async function answerCallback(cbId, text, token) {
   const url = 'https://api.telegram.org/bot' + token + '/answerCallbackQuery';
   try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callback_query_id: cbId, text: text || '✅' })
-    });
-  } catch (e) {
-    console.error('Callback error:', e);
-  }
+    await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callback_query_id: cbId, text: text || '✅' }) });
+  } catch (e) { console.error('Callback error:', e); }
 }
 
 // ====================================================================
 // ========== قوائم الأدمن ==========
 // ====================================================================
 
-function adminMainMenu() {
+function adminMenu() {
   return {
     text: '🔹 **لوحة التحكم**\n\nاختر الإجراء:',
     keyboard: {
@@ -131,8 +92,8 @@ function adminMainMenu() {
   };
 }
 
-function welcomeSettingsMenu() {
-  const w = botData.welcome;
+function welcomeMenu() {
+  const w = data.welcome;
   let btnText = 'لا توجد أزرار';
   if (w.buttons && w.buttons.length > 0) {
     btnText = w.buttons.map(b => '• ' + b.text + ' ➜ ' + b.action).join('\n');
@@ -145,24 +106,23 @@ function welcomeSettingsMenu() {
         [{ text: '✏️ تعديل النص', callback_data: 'welcome_edit_text' }],
         [{ text: '➕ إضافة زر', callback_data: 'welcome_add_btn' }],
         [{ text: '🗑️ حذف زر', callback_data: 'welcome_del_btn' }],
+        [{ text: '📋 معاينة', callback_data: 'welcome_preview' }],
         [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
       ]
     }
   };
 }
 
-function commandsSettingsMenu() {
+function commandsMenu() {
   let text = '📋 **إدارة الأوامر**\n\n';
-  
-  const cmdKeys = Object.keys(botData.commands || {});
-  if (cmdKeys.length === 0) {
+  const keys = Object.keys(data.commands || {});
+  if (keys.length === 0) {
     text += 'لا توجد أوامر مخصصة.\n';
   } else {
-    cmdKeys.forEach(k => {
-      text += '• /' + k + ' - ' + botData.commands[k].description + ' ' + (botData.commands[k].enabled ? '✅' : '❌') + '\n';
+    keys.forEach(k => {
+      text += '• /' + k + ' - ' + data.commands[k].description + ' ' + (data.commands[k].enabled ? '✅' : '❌') + '\n';
     });
   }
-  
   text += '\n🔹 اختر الإجراء:';
   
   return {
@@ -180,7 +140,7 @@ function commandsSettingsMenu() {
 }
 
 function getUserWelcome() {
-  const w = botData.welcome;
+  const w = data.welcome;
   const buttons = (w.buttons || []).map(b => [{ text: b.text, callback_data: 'w_' + b.action }]);
   return {
     text: w.text,
@@ -189,73 +149,45 @@ function getUserWelcome() {
 }
 
 // ====================================================================
-// ========== معالجة الأوامر ==========
-// ====================================================================
-
-async function handleCustomCommand(chatId, cmd, token) {
-  const command = botData.commands[cmd];
-  if (command) {
-    await sendMessage(chatId, command.response || '🔹 تم تنفيذ الأمر /' + cmd, token);
-  } else {
-    await sendMessage(chatId, '❌ الأمر /' + cmd + ' غير معروف', token);
-  }
-}
-
-async function handleUserAction(chatId, action, token) {
-  // البحث عن الزر في رسالة الترحيب
-  const btn = (botData.welcome.buttons || []).find(b => b.action === action);
-  if (btn && btn.response) {
-    await sendMessage(chatId, btn.response, token);
-  } else if (action === 'about') {
-    await sendMessage(chatId, '📌 **عن البوت**\n\nبوت لمشاهدة المحتوى.', token);
-  } else if (action === 'search') {
-    await sendMessage(chatId, '🔍 **أرسل رقم المحتوى:**', token);
-  } else {
-    await sendMessage(chatId, '🔹 ' + action, token);
-  }
-}
-
-// ====================================================================
 // ========== معالجة كولباك الأدمن ==========
 // ====================================================================
 
-async function handleAdminCallback(data, chatId, msgId, token, env) {
-  // رجوع
-  if (data === 'admin_back') {
-    const menu = adminMainMenu();
+async function handleAdminCallback(cbData, chatId, msgId, token, env) {
+  if (cbData === 'admin_back') {
+    const menu = adminMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
   
-  // رسالة الترحيب
-  if (data === 'admin_welcome') {
-    const menu = welcomeSettingsMenu();
+  // ===== رسالة الترحيب =====
+  if (cbData === 'admin_welcome') {
+    const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
   
-  if (data === 'welcome_edit_text') {
+  if (cbData === 'welcome_edit_text') {
     adminState.action = 'edit_welcome';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل نص الترحيب الجديد:**\n\nالحالي:\n' + botData.welcome.text, token, {
+    adminState.temp = { chatId, msgId };
+    await sendMessage(chatId, '📝 **أدخل نص الترحيب الجديد:**\n\nالحالي:\n' + data.welcome.text, token, {
       reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
     });
     return;
   }
   
-  if (data === 'welcome_add_btn') {
+  if (cbData === 'welcome_add_btn') {
     adminState.action = 'add_btn';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل نص الزر الجديد:**', token, {
+    adminState.temp = { chatId, msgId };
+    await sendMessage(chatId, '📝 **أدخل نص الزر:**', token, {
       reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
     });
     return;
   }
   
-  if (data === 'welcome_del_btn') {
-    const btns = botData.welcome.buttons || [];
+  if (cbData === 'welcome_del_btn') {
+    const btns = data.welcome.buttons || [];
     if (btns.length === 0) {
       await sendMessage(chatId, '⚠️ لا توجد أزرار', token);
       return;
@@ -269,87 +201,99 @@ async function handleAdminCallback(data, chatId, msgId, token, env) {
     return;
   }
   
-  if (data.startsWith('wel_del_')) {
-    const idx = parseInt(data.replace('wel_del_', ''));
-    const btns = botData.welcome.buttons || [];
+  if (cbData.startsWith('wel_del_')) {
+    const idx = parseInt(cbData.replace('wel_del_', ''));
+    const btns = data.welcome.buttons || [];
     if (idx >= 0 && idx < btns.length) {
       btns.splice(idx, 1);
-      botData.welcome.buttons = btns;
+      data.welcome.buttons = btns;
       await saveData(env);
     }
-    const menu = welcomeSettingsMenu();
+    const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
   
-  // الأوامر
-  if (data === 'admin_commands') {
-    const menu = commandsSettingsMenu();
+  if (cbData === 'welcome_preview') {
+    const w = data.welcome;
+    let preview = '📋 **معاينة رسالة الترحيب**\n\n' + w.text + '\n\n';
+    if (w.buttons && w.buttons.length > 0) {
+      preview += '🔘 **الأزرار:**\n';
+      w.buttons.forEach(b => {
+        preview += '• ' + b.text + '\n';
+      });
+    }
+    await sendMessage(chatId, preview, token);
+    return;
+  }
+  
+  // ===== الأوامر =====
+  if (cbData === 'admin_commands') {
+    const menu = commandsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
   
-  if (data === 'cmd_add') {
+  if (cbData === 'cmd_add') {
     adminState.action = 'cmd_add';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 **أدخل اسم الأمر الجديد:**\n(بدون /)', token, {
       reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
     });
     return;
   }
   
-  if (data === 'cmd_edit') {
+  if (cbData === 'cmd_edit') {
     adminState.action = 'cmd_edit';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
-    const all = Object.keys(botData.commands || {});
-    if (all.length === 0) {
-      await sendMessage(chatId, '⚠️ لا توجد أوامر للتعديل', token);
-      return;
-    }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتعديل:**\n\nالمتاحة:\n' + all.map(c => '• /' + c).join('\n'), token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
-    return;
-  }
-  
-  if (data === 'cmd_delete') {
-    adminState.action = 'cmd_delete';
-    adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
-    const all = Object.keys(botData.commands || {});
-    if (all.length === 0) {
-      await sendMessage(chatId, '⚠️ لا توجد أوامر للحذف', token);
-      return;
-    }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للحذف:**\n\nالمتاحة:\n' + all.map(c => '• /' + c).join('\n'), token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
-    return;
-  }
-  
-  if (data === 'cmd_toggle') {
-    adminState.action = 'cmd_toggle';
-    adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
-    const all = Object.keys(botData.commands || {});
+    adminState.temp = { chatId, msgId };
+    const all = Object.keys(data.commands || {});
     if (all.length === 0) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتفعيل/التعطيل:**\n\nالمتاحة:\n' + all.map(c => '• /' + c).join('\n'), token, {
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتعديل:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
       reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
     });
     return;
   }
   
-  // إلغاء
-  if (data === 'cancel') {
+  if (cbData === 'cmd_delete') {
+    adminState.action = 'cmd_delete';
+    adminState.step = 'cmd';
+    adminState.temp = { chatId, msgId };
+    const all = Object.keys(data.commands || {});
+    if (all.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
+      return;
+    }
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للحذف:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
+      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
+    });
+    return;
+  }
+  
+  if (cbData === 'cmd_toggle') {
+    adminState.action = 'cmd_toggle';
+    adminState.step = 'cmd';
+    adminState.temp = { chatId, msgId };
+    const all = Object.keys(data.commands || {});
+    if (all.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
+      return;
+    }
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتفعيل/التعطيل:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
+      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
+    });
+    return;
+  }
+  
+  if (cbData === 'cancel') {
     adminState.action = null;
     adminState.step = null;
     adminState.temp = {};
-    const menu = adminMainMenu();
+    const menu = adminMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
@@ -405,21 +349,21 @@ async function handleUpdate(update, env) {
   if (update.callback_query) {
     const q = update.callback_query;
     const userId = String(q.from.id);
-    const data = q.data;
+    const cbData = q.data;
     const chatId = q.message.chat.id;
     const msgId = q.message.message_id;
     
-    // كولباك المستخدم (أزرار الترحيب)
-    if (data.startsWith('w_')) {
-      const action = data.replace('w_', '');
-      await handleUserAction(chatId, action, token);
+    // أزرار المستخدم
+    if (cbData.startsWith('w_')) {
+      const action = cbData.replace('w_', '');
+      await sendMessage(chatId, '🔹 تم الضغط على: ' + action, token);
       await answerCallback(q.id, '✅', token);
       return;
     }
     
-    // كولباك الأدمن
+    // أدمن
     if (userId === ADMIN) {
-      await handleAdminCallback(data, chatId, msgId, token, env);
+      await handleAdminCallback(cbData, chatId, msgId, token, env);
       await answerCallback(q.id, '✅', token);
     }
     return;
@@ -434,18 +378,19 @@ async function handleUpdate(update, env) {
     
     // ===== الأدمن =====
     if (userId === ADMIN) {
-      // معالجة إدخالات الأدمن
+      // تعديل نص الترحيب
       if (adminState.action === 'edit_welcome' && adminState.step === 'text') {
-        botData.welcome.text = text;
+        data.welcome.text = text;
         await saveData(env);
         adminState.action = null;
         adminState.step = null;
-        const menu = welcomeSettingsMenu();
+        const menu = welcomeMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تحديث النص', token);
         return;
       }
       
+      // إضافة زر - الخطوة 1: النص
       if (adminState.action === 'add_btn' && adminState.step === 'text') {
         adminState.temp.btnText = text;
         adminState.step = 'action';
@@ -455,33 +400,20 @@ async function handleUpdate(update, env) {
         return;
       }
       
+      // إضافة زر - الخطوة 2: الإجراء
       if (adminState.action === 'add_btn' && adminState.step === 'action') {
-        adminState.step = 'response';
-        adminState.temp.btnAction = text;
-        await sendMessage(chatId, '📝 **أدخل الرد عند الضغط على الزر:**', token, {
-          reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-        });
-        return;
-      }
-      
-      if (adminState.action === 'add_btn' && adminState.step === 'response') {
-        if (!botData.welcome.buttons) {
-          botData.welcome.buttons = [];
-        }
-        botData.welcome.buttons.push({ 
-          text: adminState.temp.btnText, 
-          action: adminState.temp.btnAction,
-          response: text
-        });
+        if (!data.welcome.buttons) data.welcome.buttons = [];
+        data.welcome.buttons.push({ text: adminState.temp.btnText, action: text });
         await saveData(env);
         adminState.action = null;
         adminState.step = null;
-        const menu = welcomeSettingsMenu();
+        const menu = welcomeMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم إضافة الزر', token);
         return;
       }
       
+      // إضافة أمر - الخطوة 1: الاسم
       if (adminState.action === 'cmd_add' && adminState.step === 'cmd') {
         adminState.temp.cmd = text;
         adminState.step = 'desc';
@@ -491,79 +423,58 @@ async function handleUpdate(update, env) {
         return;
       }
       
+      // إضافة أمر - الخطوة 2: الوصف
       if (adminState.action === 'cmd_add' && adminState.step === 'desc') {
-        adminState.step = 'response';
-        adminState.temp.desc = text;
-        await sendMessage(chatId, '📝 **أدخل رد الأمر عند تنفيذه:**', token, {
-          reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-        });
-        return;
-      }
-      
-      if (adminState.action === 'cmd_add' && adminState.step === 'response') {
-        if (!botData.commands) {
-          botData.commands = {};
-        }
-        botData.commands[adminState.temp.cmd] = { 
-          description: adminState.temp.desc, 
-          response: text,
-          enabled: true 
-        };
+        if (!data.commands) data.commands = {};
+        data.commands[adminState.temp.cmd] = { description: text, enabled: true };
         await saveData(env);
         adminState.action = null;
         adminState.step = null;
-        const menu = commandsSettingsMenu();
+        const menu = commandsMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم إضافة الأمر /' + adminState.temp.cmd, token);
         return;
       }
       
+      // تعديل أمر - الخطوة 1: الاسم
       if (adminState.action === 'cmd_edit' && adminState.step === 'cmd') {
         const cmd = text.replace('/', '');
-        if (botData.commands && botData.commands[cmd]) {
+        if (data.commands && data.commands[cmd]) {
           adminState.temp.editCmd = cmd;
           adminState.step = 'desc';
-          await sendMessage(chatId, '📝 **أدخل الوصف الجديد لـ /' + cmd + ':**\n\nالحالي: ' + botData.commands[cmd].description, token, {
+          await sendMessage(chatId, '📝 **أدخل الوصف الجديد لـ /' + cmd + ':**\n\nالحالي: ' + data.commands[cmd].description, token, {
             reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
           });
         } else {
-          await sendMessage(chatId, '❌ الأمر /' + cmd + ' غير موجود', token);
+          await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
         }
         return;
       }
       
+      // تعديل أمر - الخطوة 2: الوصف
       if (adminState.action === 'cmd_edit' && adminState.step === 'desc') {
-        adminState.temp.newDesc = text;
-        adminState.step = 'response';
-        await sendMessage(chatId, '📝 **أدخل الرد الجديد لـ /' + adminState.temp.editCmd + ':**\n\nالحالي: ' + botData.commands[adminState.temp.editCmd].response, token, {
-          reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-        });
-        return;
-      }
-      
-      if (adminState.action === 'cmd_edit' && adminState.step === 'response') {
         const cmd = adminState.temp.editCmd;
-        if (botData.commands && botData.commands[cmd]) {
-          botData.commands[cmd].description = adminState.temp.newDesc;
-          botData.commands[cmd].response = text;
-        }
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        const menu = commandsSettingsMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تحديث /' + cmd, token);
-        return;
-      }
-      
-      if (adminState.action === 'cmd_delete' && adminState.step === 'cmd') {
-        const cmd = text.replace('/', '');
-        if (botData.commands && botData.commands[cmd]) {
-          delete botData.commands[cmd];
+        if (data.commands && data.commands[cmd]) {
+          data.commands[cmd].description = text;
           await saveData(env);
           adminState.action = null;
           adminState.step = null;
-          const menu = commandsSettingsMenu();
+          const menu = commandsMenu();
+          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+          await sendMessage(chatId, '✅ تم تحديث /' + cmd, token);
+        }
+        return;
+      }
+      
+      // حذف أمر
+      if (adminState.action === 'cmd_delete' && adminState.step === 'cmd') {
+        const cmd = text.replace('/', '');
+        if (data.commands && data.commands[cmd]) {
+          delete data.commands[cmd];
+          await saveData(env);
+          adminState.action = null;
+          adminState.step = null;
+          const menu = commandsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
           await sendMessage(chatId, '✅ تم حذف /' + cmd, token);
         } else {
@@ -572,16 +483,17 @@ async function handleUpdate(update, env) {
         return;
       }
       
+      // تفعيل/تعطيل أمر
       if (adminState.action === 'cmd_toggle' && adminState.step === 'cmd') {
         const cmd = text.replace('/', '');
-        if (botData.commands && botData.commands[cmd]) {
-          botData.commands[cmd].enabled = !botData.commands[cmd].enabled;
+        if (data.commands && data.commands[cmd]) {
+          data.commands[cmd].enabled = !data.commands[cmd].enabled;
           await saveData(env);
           adminState.action = null;
           adminState.step = null;
-          const menu = commandsSettingsMenu();
+          const menu = commandsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ تم ' + (botData.commands[cmd].enabled ? 'تفعيل' : 'تعطيل') + ' /' + cmd, token);
+          await sendMessage(chatId, '✅ تم ' + (data.commands[cmd].enabled ? 'تفعيل' : 'تعطيل') + ' /' + cmd, token);
         } else {
           await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
         }
@@ -590,13 +502,13 @@ async function handleUpdate(update, env) {
       
       // بداية لوحة الأدمن
       if (text === '/start' || text === '/admin') {
-        const menu = adminMainMenu();
+        const menu = adminMenu();
         await sendMessage(chatId, menu.text, token, { reply_markup: menu.keyboard });
       }
       return;
     }
     
-    // ===== المستخدم العادي =====
+    // ===== المستخدم =====
     if (text === '/start') {
       const welcome = getUserWelcome();
       await sendMessage(chatId, welcome.text, token, { reply_markup: welcome.keyboard });
@@ -605,21 +517,11 @@ async function handleUpdate(update, env) {
     
     // الأوامر المخصصة
     const cmd = text.startsWith('/') ? text.substring(1) : null;
-    if (cmd) {
-      if (botData.commands && botData.commands[cmd] && botData.commands[cmd].enabled) {
-        await handleCustomCommand(chatId, cmd, token);
-        return;
-      }
-      await sendMessage(chatId, '❌ الأمر /' + cmd + ' غير معروف', token);
+    if (cmd && data.commands && data.commands[cmd] && data.commands[cmd].enabled) {
+      await sendMessage(chatId, '🔹 ' + data.commands[cmd].description, token);
       return;
     }
     
-    // بحث عن محتوى
-    const content = botData.content[text];
-    if (content) {
-      await sendMessage(chatId, content, token);
-    } else {
-      await sendMessage(chatId, '❌ لا يوجد محتوى بهذا الرقم', token);
-    }
+    await sendMessage(chatId, '❌ أمر غير معروف', token);
   }
 }
