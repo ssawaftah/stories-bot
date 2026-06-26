@@ -28,7 +28,10 @@ let data = {
     channelName: null
   },
   welcome: {
-    text: '🎉 مرحباً بك في البوت!'
+    text: '🎉 <b>مرحباً بك في البوت!</b>\n\nيمكنك استخدام البوت للوصول إلى المحتوى.',
+    image: null,
+    useHtml: true,
+    registeredMessage: '📦 <b>مرحباً بعودتك!</b>\n\nيمكنك استخدام البوت الآن.'
   },
   commands: {},
   users: {},
@@ -46,7 +49,7 @@ async function sendMessage(chatId, text, token, extra) {
   const payload = { 
     chat_id: chatId, 
     text: text, 
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     reply_markup: { remove_keyboard: true }
   };
   if (extra) {
@@ -68,9 +71,37 @@ async function sendMessage(chatId, text, token, extra) {
   }
 }
 
+async function sendPhoto(chatId, fileId, caption, token, extra) {
+  const url = 'https://api.telegram.org/bot' + token + '/sendPhoto';
+  const payload = { 
+    chat_id: chatId, 
+    photo: fileId, 
+    caption: caption || '',
+    parse_mode: 'HTML',
+    reply_markup: { remove_keyboard: true }
+  };
+  if (extra) {
+    if (extra.reply_markup) {
+      payload.reply_markup = extra.reply_markup;
+    }
+    Object.assign(payload, extra);
+  }
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return await res.json();
+  } catch (e) {
+    console.error('Send photo error:', e);
+    return { ok: false, description: e.message };
+  }
+}
+
 async function editMessage(chatId, msgId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/editMessageText';
-  const payload = { chat_id: chatId, message_id: msgId, text: text, parse_mode: 'Markdown' };
+  const payload = { chat_id: chatId, message_id: msgId, text: text, parse_mode: 'HTML' };
   if (extra) Object.assign(payload, extra);
   try {
     const res = await fetch(url, {
@@ -163,17 +194,17 @@ async function sendLog(userId, username, name, action, details, token) {
   const time = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   
   const message = `
-📋 **سجل الإجراءات**
+📋 <b>سجل الإجراءات</b>
 
-👤 **الاسم:** ${name || 'غير معروف'}
-🆔 **اليوزرنيم:** @${username || 'لا يوجد'}
-🆔 **المعرف:** ${userId}
+👤 <b>الاسم:</b> ${name || 'غير معروف'}
+🆔 <b>اليوزرنيم:</b> @${username || 'لا يوجد'}
+🆔 <b>المعرف:</b> ${userId}
 
-⚡ **الإجراء:** ${action}
-📝 **التفاصيل:** ${details}
+⚡ <b>الإجراء:</b> ${action}
+📝 <b>التفاصيل:</b> ${details}
 
-📅 **التاريخ:** ${date}
-🕐 **الوقت:** ${time} (توقيت الأردن)
+📅 <b>التاريخ:</b> ${date}
+🕐 <b>الوقت:</b> ${time} (توقيت الأردن)
 ─────────────────`;
 
   try {
@@ -181,7 +212,7 @@ async function sendLog(userId, username, name, action, details, token) {
     await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: logChannelId, text: message, parse_mode: 'Markdown' })
+      body: JSON.stringify({ chat_id: logChannelId, text: message, parse_mode: 'HTML' })
     });
   } catch (e) {
     console.error('Log error:', e);
@@ -194,7 +225,7 @@ async function sendLog(userId, username, name, action, details, token) {
 
 function adminMenu() {
   return {
-    text: '🔹 **لوحة التحكم**\n\nاختر الإجراء:',
+    text: '🔹 <b>لوحة التحكم</b>\n\nاختر الإجراء:',
     keyboard: {
       inline_keyboard: [
         [{ text: '⚙️ الإعدادات', callback_data: 'admin_settings' }],
@@ -214,13 +245,13 @@ function settingsMenu() {
   const notifChannel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
   
   return {
-    text: '⚙️ **الإعدادات**\n\n' +
-          '🤖 **حالة البوت:** ' + botStatus + '\n' +
-          '✅ **التحقق:** ' + verStatus + '\n' +
-          '📢 **قناة التحقق:** ' + verChannel + '\n' +
-          '🔒 **حماية المحتوى:** ' + protectStatus + '\n' +
-          '🔔 **الإشعارات:** ' + notifStatus + '\n' +
-          '📢 **قناة الإشعارات:** ' + notifChannel + '\n\n' +
+    text: '⚙️ <b>الإعدادات</b>\n\n' +
+          '🤖 <b>حالة البوت:</b> ' + botStatus + '\n' +
+          '✅ <b>التحقق:</b> ' + verStatus + '\n' +
+          '📢 <b>قناة التحقق:</b> ' + verChannel + '\n' +
+          '🔒 <b>حماية المحتوى:</b> ' + protectStatus + '\n' +
+          '🔔 <b>الإشعارات:</b> ' + notifStatus + '\n' +
+          '📢 <b>قناة الإشعارات:</b> ' + notifChannel + '\n\n' +
           '🔹 اختر القسم:',
     keyboard: {
       inline_keyboard: [
@@ -237,7 +268,7 @@ function settingsMenu() {
 function botSettingsMenu() {
   const status = data.settings.botActive ? '🟩 البوت يعمل' : '🟥 البوت متوقف';
   return {
-    text: '🤖 **حالة البوت**\n\n📌 الحالية: ' + status + '\n\nرسالة الإيقاف الحالية:\n' + data.settings.stopMessage,
+    text: '🤖 <b>حالة البوت</b>\n\n📌 الحالية: ' + status + '\n\n<b>رسالة الإيقاف الحالية:</b>\n' + data.settings.stopMessage,
     keyboard: {
       inline_keyboard: [
         [{ text: status + ' - اضغط للتغيير', callback_data: 'bot_toggle' }],
@@ -254,7 +285,7 @@ function verificationMenu() {
   const channel = v.channelName || v.channelId || 'غير محدد';
   
   return {
-    text: '✅ **التحقق من العضوية**\n\n📌 الحالة: ' + status + '\n📢 قناة التحقق: ' + channel + '\n\n🔹 اختر الإجراء:',
+    text: '✅ <b>التحقق من العضوية</b>\n\n📌 الحالة: ' + status + '\n📢 قناة التحقق: ' + channel + '\n\n🔹 اختر الإجراء:',
     keyboard: {
       inline_keyboard: [
         [{ text: '🔄 ' + (v.enabled ? 'تعطيل' : 'تفعيل') + ' التحقق', callback_data: 'verif_toggle' }],
@@ -270,7 +301,7 @@ function verificationMenu() {
 function verificationMessagesMenu() {
   const v = data.verification;
   return {
-    text: '✏️ **رسائل التحقق**\n\n📝 **طلب الرقم:**\n' + v.requestMessage + '\n\n🔘 **زر المشاركة:**\n' + v.buttonText + '\n\n✅ **رسالة النجاح:**\n' + v.successMessage + '\n\n❌ **رسالة الرفض:**\n' + v.failMessage,
+    text: '✏️ <b>رسائل التحقق</b>\n\n📝 <b>طلب الرقم:</b>\n' + v.requestMessage + '\n\n🔘 <b>زر المشاركة:</b>\n' + v.buttonText + '\n\n✅ <b>رسالة النجاح:</b>\n' + v.successMessage + '\n\n❌ <b>رسالة الرفض:</b>\n' + v.failMessage,
     keyboard: {
       inline_keyboard: [
         [{ text: '✏️ نص طلب الرقم', callback_data: 'verif_msg_request' }],
@@ -289,7 +320,7 @@ function verificationListMenu() {
   const rejected = Object.keys(v.rejectedUsers || {});
   
   return {
-    text: '📋 **قائمة التحقق**\n\n✅ المحققين: ' + verified.length + '\n❌ المرفوضين: ' + rejected.length,
+    text: '📋 <b>قائمة التحقق</b>\n\n✅ المحققين: ' + verified.length + '\n❌ المرفوضين: ' + rejected.length,
     keyboard: {
       inline_keyboard: [
         [{ text: '✅ المحققين', callback_data: 'verif_list_verified' }],
@@ -305,7 +336,7 @@ function verificationListMenu() {
 function protectionMenu() {
   const status = data.protection.enabled ? '🔒 الحماية مفعلة' : '🔓 الحماية معطلة';
   return {
-    text: '🔒 **حماية المحتوى**\n\n📌 الحالية: ' + status + '\n\nعند التفعيل، سيمنع المستخدمون من حفظ رسائل البوت وتوجيهها.',
+    text: '🔒 <b>حماية المحتوى</b>\n\n📌 الحالية: ' + status + '\n\nعند التفعيل، سيمنع المستخدمون من حفظ رسائل البوت وتوجيهها.',
     keyboard: {
       inline_keyboard: [
         [{ text: '🔄 ' + (data.protection.enabled ? 'تعطيل' : 'تفعيل') + ' الحماية', callback_data: 'protect_toggle' }],
@@ -320,7 +351,7 @@ function notificationsMenu() {
   const channel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
   
   return {
-    text: '🔔 **الإشعارات والأحداثيات**\n\n📌 الحالة: ' + status + '\n📢 القناة: ' + channel + '\n\nعند التفعيل، ستصل جميع إجراءات المستخدمين إلى القناة المحددة.',
+    text: '🔔 <b>الإشعارات والأحداثيات</b>\n\n📌 الحالة: ' + status + '\n📢 القناة: ' + channel + '\n\nعند التفعيل، ستصل جميع إجراءات المستخدمين إلى القناة المحددة.',
     keyboard: {
       inline_keyboard: [
         [{ text: '🔄 ' + (data.notifications.enabled ? 'تعطيل' : 'تفعيل') + ' الإشعارات', callback_data: 'notif_toggle' }],
@@ -331,76 +362,80 @@ function notificationsMenu() {
   };
 }
 
+// ====================================================================
+// ========== قوائم رسالة الترحيب ==========
+// ====================================================================
+
 function welcomeMenu() {
+  const w = data.welcome;
+  const hasImage = w.image ? '🟢 موجودة' : '🔴 غير موجودة';
+  const htmlStatus = w.useHtml ? '🟢 مفعل' : '🔴 معطل';
+  
   return {
-    text: '✏️ **رسالة الترحيب**\n\n📝 **النص الحالي:**\n' + data.welcome.text + '\n\n🔹 اختر الإجراء:',
+    text: '✏️ <b>رسالة الترحيب</b>\n\n' +
+          '📝 <b>النص:</b>\n' + w.text + '\n\n' +
+          '🖼️ <b>الصورة:</b> ' + hasImage + '\n' +
+          '📄 <b>وضع HTML:</b> ' + htmlStatus + '\n\n' +
+          '📦 <b>رسالة المستخدم المسجل:</b>\n' + w.registeredMessage + '\n\n' +
+          '🔹 اختر الإجراء:',
     keyboard: {
       inline_keyboard: [
         [{ text: '✏️ تعديل النص', callback_data: 'welcome_edit_text' }],
+        [{ text: '🖼️ إضافة/تغيير صورة', callback_data: 'welcome_edit_image' }],
+        [{ text: '🗑️ حذف الصورة', callback_data: 'welcome_delete_image' }],
+        [{ text: '📄 ' + (w.useHtml ? 'تعطيل' : 'تفعيل') + ' HTML', callback_data: 'welcome_toggle_html' }],
+        [{ text: '✏️ رسالة المستخدم المسجل', callback_data: 'welcome_edit_registered' }],
+        [{ text: '📋 معاينة', callback_data: 'welcome_preview' }],
         [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
       ]
     }
   };
 }
 
-function commandsMenu() {
-  let text = '📋 **إدارة الأوامر**\n\n';
-  const keys = Object.keys(data.commands || {});
-  if (keys.length === 0) {
-    text += 'لا توجد أوامر مخصصة.\n';
-  } else {
-    keys.forEach(k => {
-      text += '• /' + k + ' - ' + data.commands[k].description + ' ' + (data.commands[k].enabled ? '✅' : '❌') + '\n';
-    });
-  }
-  text += '\n🔹 اختر الإجراء:';
-  
-  return {
-    text: text,
-    keyboard: {
-      inline_keyboard: [
-        [{ text: '➕ إضافة أمر', callback_data: 'cmd_add' }],
-        [{ text: '✏️ تعديل أمر', callback_data: 'cmd_edit' }],
-        [{ text: '🗑️ حذف أمر', callback_data: 'cmd_delete' }],
-        [{ text: '🔄 تفعيل/تعطيل', callback_data: 'cmd_toggle' }],
-        [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
-      ]
-    }
-  };
-}
-
-function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
-  const text = data.welcome.text;
+function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
+  const w = data.welcome;
   const buttons = [];
   
+  // المستخدم المرفوض
   if (isRejected) {
     return {
-      text: '❌ **طلبك مرفوض.**\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
-      keyboard: { remove_keyboard: true }
+      text: '❌ <b>طلبك مرفوض.</b>\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
+      image: null,
+      useHtml: true,
+      buttons: null
     };
   }
   
+  // المستخدم في انتظار التحقق
   if (isPending) {
     return {
-      text: '⏳ **طلبك قيد المراجعة.**\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
-      keyboard: { remove_keyboard: true }
+      text: '⏳ <b>طلبك قيد المراجعة.</b>\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
+      image: null,
+      useHtml: true,
+      buttons: null
     };
   }
   
+  // المستخدم المسجل (محقق أو التحقق معطل)
   if (isVerified || !data.verification.enabled) {
     return {
-      text: text + '\n\n📦 **يمكنك الآن استخدام البوت.**',
-      keyboard: { remove_keyboard: true }
+      text: w.registeredMessage || '📦 <b>مرحباً بعودتك!</b>\n\nيمكنك استخدام البوت الآن.',
+      image: null,
+      useHtml: w.useHtml || true,
+      buttons: null
     };
   }
   
+  // مستخدم جديد يحتاج للتحقق
   if (isNewUser || (!isVerified && data.verification.enabled)) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
   
   return {
-    text: text,
-    keyboard: { inline_keyboard: buttons }
+    text: w.text,
+    image: w.image,
+    useHtml: w.useHtml || false,
+    buttons: buttons
   };
 }
 
@@ -472,7 +507,7 @@ async function handleUpdate(update, env) {
           }
         });
       } else {
-        await sendMessage(chatId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
+        await sendMessage(chatId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
       }
       await answerCallback(q.id, '✅', token);
       return;
@@ -514,6 +549,33 @@ async function handleUpdate(update, env) {
         return;
       }
       
+      // تعديل رسالة المستخدم المسجل
+      if (adminState.action === 'edit_registered' && adminState.step === 'text') {
+        data.welcome.registeredMessage = text;
+        adminState.action = null;
+        adminState.step = null;
+        const menu = welcomeMenu();
+        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+        await sendMessage(chatId, '✅ تم تحديث رسالة المستخدم المسجل', token);
+        return;
+      }
+      
+      // معالجة الصورة المرفوعة
+      if (adminState.action === 'upload_welcome_image' && adminState.step === 'waiting_image') {
+        if (msg.photo) {
+          const photo = msg.photo[msg.photo.length - 1];
+          data.welcome.image = photo.file_id;
+          adminState.action = null;
+          adminState.step = null;
+          const menu = welcomeMenu();
+          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+          await sendMessage(chatId, '✅ تم إضافة الصورة بنجاح!', token);
+        } else {
+          await sendMessage(chatId, '❌ يرجى إرسال صورة صالحة.', token);
+        }
+        return;
+      }
+      
       // تعديل رسالة الإيقاف
       if (adminState.action === 'edit_stop' && adminState.step === 'text') {
         data.settings.stopMessage = text;
@@ -548,14 +610,14 @@ async function handleUpdate(update, env) {
           adminState.action = null;
           adminState.step = null;
           
-          const testMsg = '✅ **تم تعيين هذه القناة للتحقق من العضوية.**\n\nستصل طلبات التحقق الجديدة إلى هنا.';
+          const testMsg = '✅ <b>تم تعيين هذه القناة للتحقق من العضوية.</b>\n\nستصل طلبات التحقق الجديدة إلى هنا.';
           await sendMessage(channelId, testMsg, token);
           
           const menu = verificationMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ **تم تعيين قناة التحقق بنجاح!**\n\n📢 **اسم القناة:** ' + chatInfo.name + '\n🆔 **المعرف:** ' + channelId, token);
+          await sendMessage(chatId, '✅ <b>تم تعيين قناة التحقق بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
         } else {
-          await sendMessage(chatId, '❌ **فشل تعيين القناة.**\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+          await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
         }
         return;
       }
@@ -572,14 +634,14 @@ async function handleUpdate(update, env) {
           adminState.action = null;
           adminState.step = null;
           
-          const testMsg = '✅ **تم تعيين هذه القناة للإشعارات.**\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
+          const testMsg = '✅ <b>تم تعيين هذه القناة للإشعارات.</b>\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
           await sendMessage(channelId, testMsg, token);
           
           const menu = notificationsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ **تم تعيين قناة الإشعارات بنجاح!**\n\n📢 **اسم القناة:** ' + chatInfo.name + '\n🆔 **المعرف:** ' + channelId, token);
+          await sendMessage(chatId, '✅ <b>تم تعيين قناة الإشعارات بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
         } else {
-          await sendMessage(chatId, '❌ **فشل تعيين القناة.**\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+          await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
         }
         return;
       }
@@ -618,7 +680,7 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'cmd_add' && adminState.step === 'cmd') {
         adminState.temp.cmd = text;
         adminState.step = 'desc';
-        await sendMessage(chatId, '📝 **أدخل وصف الأمر:**', token);
+        await sendMessage(chatId, '📝 <b>أدخل وصف الأمر:</b>', token);
         return;
       }
       
@@ -640,7 +702,7 @@ async function handleUpdate(update, env) {
         if (data.commands && data.commands[cmd]) {
           adminState.temp.editCmd = cmd;
           adminState.step = 'desc';
-          await sendMessage(chatId, '📝 **أدخل الوصف الجديد لـ /' + cmd + ':**\n\nالحالي: ' + data.commands[cmd].description, token);
+          await sendMessage(chatId, '📝 <b>أدخل الوصف الجديد لـ /' + cmd + ':</b>\n\nالحالي: ' + data.commands[cmd].description, token);
         } else {
           await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
         }
@@ -714,12 +776,12 @@ async function handleUpdate(update, env) {
       if (data.verification.enabled) {
         if (data.verification.channelId) {
           const adminMsg = `
-👤 **طلب تحقق جديد!**
+👤 <b>طلب تحقق جديد!</b>
 
-👤 **الاسم:** ${name}
-🆔 **اليوزرنيم:** @${username}
-🆔 **المعرف:** ${userId}
-📱 **رقم الهاتف:** ${contact.phone_number}
+👤 <b>الاسم:</b> ${name}
+🆔 <b>اليوزرنيم:</b> @${username}
+🆔 <b>المعرف:</b> ${userId}
+📱 <b>رقم الهاتف:</b> ${contact.phone_number}
 
 📌 اضغط للقبول أو الرفض:`;
 
@@ -770,11 +832,20 @@ async function handleUpdate(update, env) {
         data.users[userId] = { name: name, username: username, joined: new Date().toISOString() };
       }
       
-      const welcome = getUserWelcome(isNewUser, isPending, isVerified, isRejected);
-      await sendMessage(chatId, welcome.text, token, { 
-        reply_markup: welcome.keyboard,
-        remove_keyboard: true 
-      });
+      const welcome = getWelcomeForUser(isNewUser, isPending, isVerified, isRejected);
+      
+      // إرسال الرسالة مع الصورة إذا كانت موجودة
+      if (welcome.image) {
+        await sendPhoto(chatId, welcome.image, welcome.text, token, { 
+          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true },
+          parse_mode: 'HTML'
+        });
+      } else {
+        await sendMessage(chatId, welcome.text, token, { 
+          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true },
+          parse_mode: 'HTML'
+        });
+      }
       return;
     }
     
@@ -837,7 +908,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_stop';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل رسالة الإيقاف الجديدة:**\n\nالحالية:\n' + data.settings.stopMessage, token);
+    await sendMessage(chatId, '📝 <b>أدخل رسالة الإيقاف الجديدة:</b>\n\nالحالية:\n' + data.settings.stopMessage, token);
     return;
   }
   
@@ -865,7 +936,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId, field: 'requestMessage' };
-    await sendMessage(chatId, '📝 **أدخل نص طلب الرقم الجديد:**\n\nالحالي:\n' + data.verification.requestMessage, token);
+    await sendMessage(chatId, '📝 <b>أدخل نص طلب الرقم الجديد:</b>\n\nالحالي:\n' + data.verification.requestMessage, token);
     return;
   }
   
@@ -873,7 +944,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId, field: 'buttonText' };
-    await sendMessage(chatId, '📝 **أدخل نص زر المشاركة الجديد:**\n\nالحالي:\n' + data.verification.buttonText, token);
+    await sendMessage(chatId, '📝 <b>أدخل نص زر المشاركة الجديد:</b>\n\nالحالي:\n' + data.verification.buttonText, token);
     return;
   }
   
@@ -881,7 +952,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId, field: 'successMessage' };
-    await sendMessage(chatId, '📝 **أدخل رسالة النجاح الجديدة:**\n\nالحالية:\n' + data.verification.successMessage, token);
+    await sendMessage(chatId, '📝 <b>أدخل رسالة النجاح الجديدة:</b>\n\nالحالية:\n' + data.verification.successMessage, token);
     return;
   }
   
@@ -889,7 +960,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId, field: 'failMessage' };
-    await sendMessage(chatId, '📝 **أدخل رسالة الرفض الجديدة:**\n\nالحالية:\n' + data.verification.failMessage, token);
+    await sendMessage(chatId, '📝 <b>أدخل رسالة الرفض الجديدة:</b>\n\nالحالية:\n' + data.verification.failMessage, token);
     return;
   }
   
@@ -897,7 +968,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'set_verif_channel';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل معرف قناة التحقق:**\n(يجب أن يكون البوت أدمن في القناة)', token);
+    await sendMessage(chatId, '📝 <b>أدخل معرف قناة التحقق:</b>\n(يجب أن يكون البوت أدمن في القناة)', token);
     return;
   }
   
@@ -907,11 +978,10 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
-  // ===== عرض المحققين =====
   if (cbData === 'verif_list_verified') {
     const v = data.verification.verifiedUsers || {};
     const keys = Object.keys(v);
-    let text = '✅ **المستخدمين المحققين**\n\n';
+    let text = '✅ <b>المستخدمين المحققين</b>\n\n';
     if (keys.length === 0) {
       text += 'لا يوجد مستخدمين محققين.';
     } else {
@@ -923,11 +993,10 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
-  // ===== عرض المرفوضين مع زر إعادة قبول =====
   if (cbData === 'verif_list_rejected') {
     const v = data.verification.rejectedUsers || {};
     const keys = Object.keys(v);
-    let text = '❌ **المستخدمين المرفوضين**\n\n';
+    let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
     
     if (keys.length === 0) {
       text += 'لا يوجد مستخدمين مرفوضين.';
@@ -935,7 +1004,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       return;
     }
     
-    // إنشاء أزرار لكل مرفوض مع زر إعادة قبول
     const buttons = [];
     keys.forEach(id => {
       buttons.push([
@@ -945,21 +1013,18 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     });
     buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
     
-    // عرض القائمة مع الأزرار
     await editMessage(chatId, msgId, text, token, { 
       reply_markup: { inline_keyboard: buttons }
     });
     return;
   }
   
-  // ===== إعادة قبول مرفوض =====
   if (cbData.startsWith('verif_reapprove_')) {
     const targetId = cbData.replace('verif_reapprove_', '');
     
     if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
       const user = data.verification.rejectedUsers[targetId];
       
-      // نقل من المرفوضين إلى المحققين
       if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
       data.verification.verifiedUsers[targetId] = { 
         name: user.name, 
@@ -968,14 +1033,12 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       };
       delete data.verification.rejectedUsers[targetId];
       
-      // إرسال رسالة للمستخدم
-      await sendMessage(targetId, '✅ **تم إعادة قبول طلبك!**\n\n' + data.verification.successMessage, token);
-      await sendMessage(targetId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
+      await sendMessage(targetId, '✅ <b>تم إعادة قبول طلبك!</b>\n\n' + data.verification.successMessage, token);
+      await sendMessage(targetId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
       
-      // تحديث قائمة المرفوضين
       const v = data.verification.rejectedUsers || {};
       const keys = Object.keys(v);
-      let text = '❌ **المستخدمين المرفوضين**\n\n';
+      let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
       
       if (keys.length === 0) {
         text += 'لا يوجد مستخدمين مرفوضين.';
@@ -995,22 +1058,20 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await editMessage(chatId, msgId, text, token, { 
         reply_markup: { inline_keyboard: buttons }
       });
-      await sendMessage(chatId, '✅ **تم إعادة قبول المستخدم ' + targetId + '**', token);
+      await sendMessage(chatId, '✅ <b>تم إعادة قبول المستخدم ' + targetId + '</b>', token);
     }
     return;
   }
   
-  // ===== حذف من المرفوضين =====
   if (cbData.startsWith('verif_delete_rejected_')) {
     const targetId = cbData.replace('verif_delete_rejected_', '');
     
     if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
       delete data.verification.rejectedUsers[targetId];
       
-      // تحديث قائمة المرفوضين
       const v = data.verification.rejectedUsers || {};
       const keys = Object.keys(v);
-      let text = '❌ **المستخدمين المرفوضين**\n\n';
+      let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
       
       if (keys.length === 0) {
         text += 'لا يوجد مستخدمين مرفوضين.';
@@ -1030,7 +1091,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await editMessage(chatId, msgId, text, token, { 
         reply_markup: { inline_keyboard: buttons }
       });
-      await sendMessage(chatId, '🗑️ **تم حذف المستخدم ' + targetId + ' من المرفوضين**', token);
+      await sendMessage(chatId, '🗑️ <b>تم حذف المستخدم ' + targetId + ' من المرفوضين</b>', token);
     }
     return;
   }
@@ -1039,7 +1100,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'verif_add_user';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل ID المستخدم للإضافة:**', token);
+    await sendMessage(chatId, '📝 <b>أدخل ID المستخدم للإضافة:</b>', token);
     return;
   }
   
@@ -1047,11 +1108,10 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'verif_remove_user';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل ID المستخدم للحذف:**', token);
+    await sendMessage(chatId, '📝 <b>أدخل ID المستخدم للحذف:</b>', token);
     return;
   }
   
-  // ===== قبول/رفض التحقق =====
   if (cbData.startsWith('verif_approve_')) {
     const targetId = cbData.replace('verif_approve_', '');
     if (data.verification.pendingUsers && data.verification.pendingUsers[targetId]) {
@@ -1060,9 +1120,9 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       data.verification.verifiedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
       
-      await editMessage(chatId, msgId, '✅ **تم قبول المستخدم**\n\n' + user.name, token);
+      await editMessage(chatId, msgId, '✅ <b>تم قبول المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.successMessage, token);
-      await sendMessage(targetId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
+      await sendMessage(targetId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
     }
     return;
   }
@@ -1075,7 +1135,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       data.verification.rejectedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
       
-      await editMessage(chatId, msgId, '❌ **تم رفض المستخدم**\n\n' + user.name, token);
+      await editMessage(chatId, msgId, '❌ <b>تم رفض المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.failMessage, token);
     }
     return;
@@ -1114,7 +1174,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'set_notif_channel';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل معرف قناة الإشعارات:**\n(يجب أن يكون البوت أدمن في القناة)', token);
+    await sendMessage(chatId, '📝 <b>أدخل معرف قناة الإشعارات:</b>\n(يجب أن يكون البوت أدمن في القناة)', token);
     return;
   }
   
@@ -1129,7 +1189,54 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_welcome';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل نص الترحيب الجديد:**\n\nالحالي:\n' + data.welcome.text, token);
+    await sendMessage(chatId, '📝 <b>أدخل نص الترحيب الجديد:</b>\n(يمكنك استخدام HTML)\n\nالحالي:\n' + data.welcome.text, token);
+    return;
+  }
+  
+  if (cbData === 'welcome_edit_image') {
+    adminState.action = 'upload_welcome_image';
+    adminState.step = 'waiting_image';
+    adminState.temp = { chatId: chatId, msgId: msgId };
+    await sendMessage(chatId, '🖼️ <b>أرسل الصورة الجديدة:</b>', token);
+    return;
+  }
+  
+  if (cbData === 'welcome_delete_image') {
+    data.welcome.image = null;
+    const menu = welcomeMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '🗑️ تم حذف الصورة', token);
+    return;
+  }
+  
+  if (cbData === 'welcome_toggle_html') {
+    data.welcome.useHtml = !data.welcome.useHtml;
+    const menu = welcomeMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '📄 تم ' + (data.welcome.useHtml ? 'تفعيل' : 'تعطيل') + ' وضع HTML', token);
+    return;
+  }
+  
+  if (cbData === 'welcome_edit_registered') {
+    adminState.action = 'edit_registered';
+    adminState.step = 'text';
+    adminState.temp = { chatId: chatId, msgId: msgId };
+    await sendMessage(chatId, '📝 <b>أدخل رسالة المستخدم المسجل الجديدة:</b>\n(يمكنك استخدام HTML)\n\nالحالية:\n' + data.welcome.registeredMessage, token);
+    return;
+  }
+  
+  if (cbData === 'welcome_preview') {
+    const w = data.welcome;
+    let previewText = '📋 <b>معاينة رسالة الترحيب</b>\n\n' +
+                      '👤 <b>للمستخدم الجديد:</b>\n' + w.text + '\n\n' +
+                      '👤 <b>للمستخدم المسجل:</b>\n' + w.registeredMessage;
+    
+    if (w.image) {
+      previewText += '\n\n🖼️ <b>الصورة:</b> موجودة';
+      await sendPhoto(chatId, w.image, previewText, token);
+    } else {
+      await sendMessage(chatId, previewText, token);
+    }
     return;
   }
   
@@ -1144,7 +1251,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'cmd_add';
     adminState.step = 'cmd';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر الجديد:**\n(بدون /)', token);
+    await sendMessage(chatId, '📝 <b>أدخل اسم الأمر الجديد:</b>\n(بدون /)', token);
     return;
   }
   
@@ -1157,7 +1264,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتعديل:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
+    await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للتعديل:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
@@ -1170,7 +1277,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للحذف:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
+    await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للحذف:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
@@ -1183,7 +1290,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتفعيل/التعطيل:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
+    await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للتفعيل/التعطيل:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
