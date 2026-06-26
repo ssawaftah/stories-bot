@@ -1,8 +1,9 @@
 // ====================================================================
-// ========== بوت تيليجرام ==========
+// ========== بوت تيليجرام مع حفظ البيانات في KV ==========
 // ====================================================================
 
-let data = {
+// ========== البيانات الافتراضية ==========
+const DEFAULT_DATA = {
   settings: {
     botActive: true,
     stopMessage: '⏸️ البوت متوقف حالياً. يرجى المحاولة لاحقاً.'
@@ -38,11 +39,43 @@ let data = {
   content: {}
 };
 
-const adminState = { action: null, step: null, temp: {} };
+let data = {};
+
+// ====================================================================
+// ========== دوال KV ==========
+// ====================================================================
+
+async function loadData(env) {
+  try {
+    const stored = await env.KV_NAMESPACE.get('bot_data', 'json');
+    if (stored) {
+      data = stored;
+      console.log('✅ Data loaded from KV');
+    } else {
+      data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+      await saveData(env);
+      console.log('✅ Default data saved to KV');
+    }
+  } catch (e) {
+    console.error('Error loading data:', e);
+    data = JSON.parse(JSON.stringify(DEFAULT_DATA));
+  }
+}
+
+async function saveData(env) {
+  try {
+    await env.KV_NAMESPACE.put('bot_data', JSON.stringify(data));
+    console.log('✅ Data saved to KV');
+  } catch (e) {
+    console.error('Error saving data:', e);
+  }
+}
 
 // ====================================================================
 // ========== دوال مساعدة ==========
 // ====================================================================
+
+const adminState = { action: null, step: null, temp: {} };
 
 async function sendMessage(chatId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
@@ -172,7 +205,7 @@ async function updateBotCommands(token) {
 }
 
 // ====================================================================
-// ========== دوال التسجيل ==========
+// ========== دوال التسجيل (Logs) ==========
 // ====================================================================
 
 let logChannelId = null;
@@ -220,7 +253,7 @@ async function sendLog(userId, username, name, action, details, token) {
 }
 
 // ====================================================================
-// ========== قوائم الأدمن ==========
+// ========== دوال إنشاء القوائم ==========
 // ====================================================================
 
 function adminMenu() {
@@ -362,10 +395,6 @@ function notificationsMenu() {
   };
 }
 
-// ====================================================================
-// ========== قوائم رسالة الترحيب ==========
-// ====================================================================
-
 function welcomeMenu() {
   const w = data.welcome;
   const hasImage = w.image ? '🟢 موجودة' : '🔴 غير موجودة';
@@ -392,41 +421,60 @@ function welcomeMenu() {
   };
 }
 
+function commandsMenu() {
+  let text = '📋 <b>إدارة الأوامر</b>\n\n';
+  const keys = Object.keys(data.commands || {});
+  if (keys.length === 0) {
+    text += 'لا توجد أوامر مخصصة.\n';
+  } else {
+    keys.forEach(k => {
+      text += '• /' + k + ' - ' + data.commands[k].description + ' ' + (data.commands[k].enabled ? '✅' : '❌') + '\n';
+    });
+  }
+  text += '\n🔹 اختر الإجراء:';
+  
+  return {
+    text: text,
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '➕ إضافة أمر', callback_data: 'cmd_add' }],
+        [{ text: '✏️ تعديل أمر', callback_data: 'cmd_edit' }],
+        [{ text: '🗑️ حذف أمر', callback_data: 'cmd_delete' }],
+        [{ text: '🔄 تفعيل/تعطيل', callback_data: 'cmd_toggle' }],
+        [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+      ]
+    }
+  };
+}
+
 function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   const w = data.welcome;
   const buttons = [];
   
-  // المستخدم المرفوض
   if (isRejected) {
     return {
       text: '❌ <b>طلبك مرفوض.</b>\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
       image: null,
-      useHtml: true,
       buttons: null
     };
   }
   
-  // المستخدم في انتظار التحقق
   if (isPending) {
     return {
       text: '⏳ <b>طلبك قيد المراجعة.</b>\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
       image: null,
-      useHtml: true,
       buttons: null
     };
   }
   
-  // المستخدم المسجل (محقق أو التحقق معطل)
   if (isVerified || !data.verification.enabled) {
     return {
       text: w.registeredMessage || '📦 <b>مرحباً بعودتك!</b>\n\nيمكنك استخدام البوت الآن.',
       image: null,
-      useHtml: w.useHtml || true,
       buttons: null
     };
   }
   
-  // مستخدم جديد يحتاج للتحقق
   if (isNewUser || (!isVerified && data.verification.enabled)) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
@@ -434,7 +482,6 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   return {
     text: w.text,
     image: w.image,
-    useHtml: w.useHtml || false,
     buttons: buttons
   };
 }
@@ -447,6 +494,10 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     
+    // تحميل البيانات من KV
+    await loadData(env);
+    
+    // تحديث إعدادات التسجيل
     setLogChannel(data.notifications.channelId);
     setLogEnabled(data.notifications.enabled);
     
@@ -493,7 +544,6 @@ async function handleUpdate(update, env) {
     const chatId = q.message.chat.id;
     const msgId = q.message.message_id;
     
-    // زر بدء الاستخدام
     if (cbData === 'start_use') {
       const user = data.users[userId] || {};
       await sendLog(userId, user.username, user.name, '▶️ بدء الاستخدام', 'بدأ المستخدم استخدام البوت', token);
@@ -541,6 +591,7 @@ async function handleUpdate(update, env) {
       // تعديل نص الترحيب
       if (adminState.action === 'edit_welcome' && adminState.step === 'text') {
         data.welcome.text = text;
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = welcomeMenu();
@@ -552,6 +603,7 @@ async function handleUpdate(update, env) {
       // تعديل رسالة المستخدم المسجل
       if (adminState.action === 'edit_registered' && adminState.step === 'text') {
         data.welcome.registeredMessage = text;
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = welcomeMenu();
@@ -565,6 +617,7 @@ async function handleUpdate(update, env) {
         if (msg.photo) {
           const photo = msg.photo[msg.photo.length - 1];
           data.welcome.image = photo.file_id;
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           const menu = welcomeMenu();
@@ -579,6 +632,7 @@ async function handleUpdate(update, env) {
       // تعديل رسالة الإيقاف
       if (adminState.action === 'edit_stop' && adminState.step === 'text') {
         data.settings.stopMessage = text;
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = botSettingsMenu();
@@ -591,6 +645,7 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'edit_verif_msg' && adminState.step === 'text') {
         const field = adminState.temp.field;
         data.verification[field] = text;
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = verificationMessagesMenu();
@@ -607,6 +662,7 @@ async function handleUpdate(update, env) {
         if (chatInfo) {
           data.verification.channelId = channelId;
           data.verification.channelName = chatInfo.name;
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           
@@ -631,6 +687,7 @@ async function handleUpdate(update, env) {
           data.notifications.channelId = channelId;
           data.notifications.channelName = chatInfo.name;
           setLogChannel(channelId);
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           
@@ -651,6 +708,7 @@ async function handleUpdate(update, env) {
         const targetId = text.trim();
         if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
         data.verification.verifiedUsers[targetId] = { name: 'مستخدم', date: new Date().toISOString() };
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         await sendMessage(chatId, '✅ تم إضافة المستخدم ' + targetId, token);
@@ -668,6 +726,7 @@ async function handleUpdate(update, env) {
         if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
           delete data.verification.rejectedUsers[targetId];
         }
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         await sendMessage(chatId, '✅ تم حذف المستخدم ' + targetId, token);
@@ -687,6 +746,7 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'cmd_add' && adminState.step === 'desc') {
         if (!data.commands) data.commands = {};
         data.commands[adminState.temp.cmd] = { description: text, enabled: true };
+        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         await updateBotCommands(token);
@@ -713,6 +773,7 @@ async function handleUpdate(update, env) {
         const cmd = adminState.temp.editCmd;
         if (data.commands && data.commands[cmd]) {
           data.commands[cmd].description = text;
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           await updateBotCommands(token);
@@ -728,6 +789,7 @@ async function handleUpdate(update, env) {
         const cmd = text.replace('/', '');
         if (data.commands && data.commands[cmd]) {
           delete data.commands[cmd];
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           await updateBotCommands(token);
@@ -745,6 +807,7 @@ async function handleUpdate(update, env) {
         const cmd = text.replace('/', '');
         if (data.commands && data.commands[cmd]) {
           data.commands[cmd].enabled = !data.commands[cmd].enabled;
+          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           await updateBotCommands(token);
@@ -813,6 +876,7 @@ async function handleUpdate(update, env) {
           phone: contact.phone_number,
           date: new Date().toISOString()
         };
+        await saveData(env);
         
         await sendMessage(chatId, '⏳ تم استلام طلبك! جاري المراجعة...', token);
         return;
@@ -830,20 +894,18 @@ async function handleUpdate(update, env) {
       
       if (isNewUser) {
         data.users[userId] = { name: name, username: username, joined: new Date().toISOString() };
+        await saveData(env);
       }
       
       const welcome = getWelcomeForUser(isNewUser, isPending, isVerified, isRejected);
       
-      // إرسال الرسالة مع الصورة إذا كانت موجودة
       if (welcome.image) {
         await sendPhoto(chatId, welcome.image, welcome.text, token, { 
-          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true },
-          parse_mode: 'HTML'
+          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true }
         });
       } else {
         await sendMessage(chatId, welcome.text, token, { 
-          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true },
-          parse_mode: 'HTML'
+          reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true }
         });
       }
       return;
@@ -899,6 +961,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'bot_toggle') {
     data.settings.botActive = !data.settings.botActive;
+    await saveData(env);
     const menu = botSettingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -921,6 +984,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'verif_toggle') {
     data.verification.enabled = !data.verification.enabled;
+    await saveData(env);
     const menu = verificationMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -1032,6 +1096,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
         reapproved: true 
       };
       delete data.verification.rejectedUsers[targetId];
+      await saveData(env);
       
       await sendMessage(targetId, '✅ <b>تم إعادة قبول طلبك!</b>\n\n' + data.verification.successMessage, token);
       await sendMessage(targetId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
@@ -1068,6 +1133,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     
     if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
       delete data.verification.rejectedUsers[targetId];
+      await saveData(env);
       
       const v = data.verification.rejectedUsers || {};
       const keys = Object.keys(v);
@@ -1119,6 +1185,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
       data.verification.verifiedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
+      await saveData(env);
       
       await editMessage(chatId, msgId, '✅ <b>تم قبول المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.successMessage, token);
@@ -1134,6 +1201,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       if (!data.verification.rejectedUsers) data.verification.rejectedUsers = {};
       data.verification.rejectedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
+      await saveData(env);
       
       await editMessage(chatId, msgId, '❌ <b>تم رفض المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.failMessage, token);
@@ -1150,6 +1218,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'protect_toggle') {
     data.protection.enabled = !data.protection.enabled;
+    await saveData(env);
     const menu = protectionMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -1165,6 +1234,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   if (cbData === 'notif_toggle') {
     data.notifications.enabled = !data.notifications.enabled;
     setLogEnabled(data.notifications.enabled);
+    await saveData(env);
     const menu = notificationsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -1203,6 +1273,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'welcome_delete_image') {
     data.welcome.image = null;
+    await saveData(env);
     const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     await sendMessage(chatId, '🗑️ تم حذف الصورة', token);
@@ -1211,6 +1282,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'welcome_toggle_html') {
     data.welcome.useHtml = !data.welcome.useHtml;
+    await saveData(env);
     const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     await sendMessage(chatId, '📄 تم ' + (data.welcome.useHtml ? 'تفعيل' : 'تعطيل') + ' وضع HTML', token);
