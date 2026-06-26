@@ -548,7 +548,6 @@ async function handleUpdate(update, env) {
           adminState.action = null;
           adminState.step = null;
           
-          // إرسال رسالة اختبار للقناة
           const testMsg = '✅ **تم تعيين هذه القناة للتحقق من العضوية.**\n\nستصل طلبات التحقق الجديدة إلى هنا.';
           await sendMessage(channelId, testMsg, token);
           
@@ -573,7 +572,6 @@ async function handleUpdate(update, env) {
           adminState.action = null;
           adminState.step = null;
           
-          // إرسال رسالة اختبار للقناة
           const testMsg = '✅ **تم تعيين هذه القناة للإشعارات.**\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
           await sendMessage(channelId, testMsg, token);
           
@@ -909,6 +907,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
+  // ===== عرض المحققين =====
   if (cbData === 'verif_list_verified') {
     const v = data.verification.verifiedUsers || {};
     const keys = Object.keys(v);
@@ -924,19 +923,115 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     return;
   }
   
+  // ===== عرض المرفوضين مع زر إعادة قبول =====
   if (cbData === 'verif_list_rejected') {
     const v = data.verification.rejectedUsers || {};
     const keys = Object.keys(v);
     let text = '❌ **المستخدمين المرفوضين**\n\n';
+    
     if (keys.length === 0) {
       text += 'لا يوجد مستخدمين مرفوضين.';
-    } else {
-      keys.forEach(id => {
-        text += '• ' + id + ' - ' + (v[id].name || 'غير معروف') + '\n';
-      });
+      await sendMessage(chatId, text, token);
+      return;
     }
-    text += '\n🔹 يمكنك إعادة قبولهم من قائمة المرفوضين.';
-    await sendMessage(chatId, text, token);
+    
+    // إنشاء أزرار لكل مرفوض مع زر إعادة قبول
+    const buttons = [];
+    keys.forEach(id => {
+      buttons.push([
+        { text: '✅ إعادة قبول ' + id, callback_data: 'verif_reapprove_' + id },
+        { text: '🗑️ حذف ' + id, callback_data: 'verif_delete_rejected_' + id }
+      ]);
+    });
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
+    
+    // عرض القائمة مع الأزرار
+    await editMessage(chatId, msgId, text, token, { 
+      reply_markup: { inline_keyboard: buttons }
+    });
+    return;
+  }
+  
+  // ===== إعادة قبول مرفوض =====
+  if (cbData.startsWith('verif_reapprove_')) {
+    const targetId = cbData.replace('verif_reapprove_', '');
+    
+    if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
+      const user = data.verification.rejectedUsers[targetId];
+      
+      // نقل من المرفوضين إلى المحققين
+      if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
+      data.verification.verifiedUsers[targetId] = { 
+        name: user.name, 
+        date: new Date().toISOString(),
+        reapproved: true 
+      };
+      delete data.verification.rejectedUsers[targetId];
+      
+      // إرسال رسالة للمستخدم
+      await sendMessage(targetId, '✅ **تم إعادة قبول طلبك!**\n\n' + data.verification.successMessage, token);
+      await sendMessage(targetId, '📦 **المحتوى:**\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
+      
+      // تحديث قائمة المرفوضين
+      const v = data.verification.rejectedUsers || {};
+      const keys = Object.keys(v);
+      let text = '❌ **المستخدمين المرفوضين**\n\n';
+      
+      if (keys.length === 0) {
+        text += 'لا يوجد مستخدمين مرفوضين.';
+        await editMessage(chatId, msgId, text, token);
+        return;
+      }
+      
+      const buttons = [];
+      keys.forEach(id => {
+        buttons.push([
+          { text: '✅ إعادة قبول ' + id, callback_data: 'verif_reapprove_' + id },
+          { text: '🗑️ حذف ' + id, callback_data: 'verif_delete_rejected_' + id }
+        ]);
+      });
+      buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
+      
+      await editMessage(chatId, msgId, text, token, { 
+        reply_markup: { inline_keyboard: buttons }
+      });
+      await sendMessage(chatId, '✅ **تم إعادة قبول المستخدم ' + targetId + '**', token);
+    }
+    return;
+  }
+  
+  // ===== حذف من المرفوضين =====
+  if (cbData.startsWith('verif_delete_rejected_')) {
+    const targetId = cbData.replace('verif_delete_rejected_', '');
+    
+    if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
+      delete data.verification.rejectedUsers[targetId];
+      
+      // تحديث قائمة المرفوضين
+      const v = data.verification.rejectedUsers || {};
+      const keys = Object.keys(v);
+      let text = '❌ **المستخدمين المرفوضين**\n\n';
+      
+      if (keys.length === 0) {
+        text += 'لا يوجد مستخدمين مرفوضين.';
+        await editMessage(chatId, msgId, text, token);
+        return;
+      }
+      
+      const buttons = [];
+      keys.forEach(id => {
+        buttons.push([
+          { text: '✅ إعادة قبول ' + id, callback_data: 'verif_reapprove_' + id },
+          { text: '🗑️ حذف ' + id, callback_data: 'verif_delete_rejected_' + id }
+        ]);
+      });
+      buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
+      
+      await editMessage(chatId, msgId, text, token, { 
+        reply_markup: { inline_keyboard: buttons }
+      });
+      await sendMessage(chatId, '🗑️ **تم حذف المستخدم ' + targetId + ' من المرفوضين**', token);
+    }
     return;
   }
   
