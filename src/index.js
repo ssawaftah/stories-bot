@@ -61,6 +61,14 @@ const DEFAULT_DATA = {
   broadcast: {
     history: [], // سجل الرسائل الجماعية
   },
+  content: {
+    items: {},          // { "12345": { id, title, type, parts, createdAt, status } }
+    publishChannel: null,
+    publishChannelName: null,
+    nextId: 10000,      // عداد المعرفات التلقائي (5 أرقام)
+    contactMessage: "📞 <b>للتواصل معنا:</b>\n\nيمكنك التواصل مع الإدارة مباشرة.",
+    searchPrompt: "🔍 أرسل رقم المحتوى المكون من 5 أرقام:",
+  },
   stats: {
     totalMessages: 0,
     totalCommands: 0,
@@ -548,6 +556,7 @@ function recordActivity(userId) {
 // ====================================================================
 
 function adminMenu() {
+  const contentCount = Object.keys(data.content?.items || {}).length;
   return {
     text: "🔹 <b>لوحة التحكم - الإصدار 2.0</b>\n\nاختر القسم:",
     keyboard: {
@@ -573,6 +582,9 @@ function adminMenu() {
             text: "🔗 الاشتراك الإجباري",
             callback_data: "admin_forced_subscription",
           },
+        ],
+        [
+          { text: `📁 إدارة المحتوى (${contentCount})`, callback_data: "admin_content" },
         ],
         [
           { text: "👮 الأدمنات", callback_data: "admin_admins" },
@@ -651,6 +663,9 @@ function statsMenu() {
 
   const broadcastHistory = data.broadcast?.history || [];
 
+  const contentItems = Object.values(data.content?.items || {});
+  const publishedContent = contentItems.filter((i) => i.status === "published").length;
+
   return {
     text: `📊 <b>إحصائيات البوت</b>
 
@@ -667,6 +682,10 @@ function statsMenu() {
 🔗 <b>الاشتراك الإجباري:</b>
   • الاشتراكات: <b>${fsList.length}</b>
   • أكملوا: <b>${fsCompleted}</b>
+
+📁 <b>المحتوى:</b>
+  • الإجمالي: <b>${contentItems.length}</b>
+  • منشور: <b>${publishedContent}</b>
 
 📋 <b>الأوامر:</b> ${cmds.length}
 📢 <b>رسائل جماعية:</b> ${broadcastHistory.length}
@@ -1083,6 +1102,150 @@ function forcedSubscriptionMenu() {
   };
 }
 
+// ====================================================================
+// ========== قوائم إدارة المحتوى ==========
+// ====================================================================
+
+function contentManagementMenu() {
+  const c = data.content || {};
+  const items = Object.values(c.items || {});
+  const total = items.length;
+  const published = items.filter((i) => i.status === "published").length;
+  const drafts = items.filter((i) => i.status !== "published").length;
+  const channel = c.publishChannelName || c.publishChannel || "❌ غير محددة";
+  return {
+    text: `📁 <b>إدارة المحتوى</b>
+
+📊 <b>الإحصائيات:</b>
+  • الإجمالي: <b>${total}</b>
+  • منشور: <b>${published}</b>  |  مسودة: <b>${drafts}</b>
+  
+📢 <b>قناة النشر:</b> ${channel}
+
+🔹 اختر الإجراء:`,
+    keyboard: {
+      inline_keyboard: [
+        [{ text: "➕ إضافة محتوى جديد", callback_data: "cnt_add" }],
+        [
+          { text: `📋 قائمة المحتوى (${total})`, callback_data: "cnt_list_1" },
+          { text: "🔍 بحث عن محتوى", callback_data: "cnt_search" },
+        ],
+        [
+          { text: "📢 تعيين قناة النشر", callback_data: "cnt_set_channel" },
+          { text: "💬 رسالة التواصل", callback_data: "cnt_set_contact" },
+        ],
+        [
+          { text: "✏️ رسالة البحث", callback_data: "cnt_set_search_prompt" },
+        ],
+        [{ text: "🔙 رجوع", callback_data: "admin_back" }],
+      ],
+    },
+  };
+}
+
+function contentListMenu(page) {
+  const items = Object.values(data.content?.items || {}).sort(
+    (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+  );
+  const total = items.length;
+  const perPage = 6;
+  const totalPages = Math.ceil(total / perPage) || 1;
+  page = Math.max(1, Math.min(page, totalPages));
+  const start = (page - 1) * perPage;
+  const pageItems = items.slice(start, start + perPage);
+
+  let text = `📋 <b>قائمة المحتوى</b>\n📌 الصفحة ${page}/${totalPages} (${total} عنصر)\n\n`;
+  if (total === 0) text = "📭 <b>لا يوجد محتوى بعد.</b>\n\nاضغط ➕ لإضافة أول محتوى.";
+
+  const buttons = pageItems.map((item) => {
+    const icon = item.status === "published" ? "✅" : "📝";
+    const typeIcon = { text: "📝", photo: "🖼️", video: "🎥", mixed: "📦" }[item.type] || "📄";
+    return [{ text: `${icon} ${typeIcon} ${item.id} — ${item.title.substring(0, 25)}`, callback_data: "cnt_detail_" + item.id }];
+  });
+
+  if (totalPages > 1) {
+    const nav = [];
+    if (page > 1) nav.push({ text: "⬅️", callback_data: "cnt_list_" + (page - 1) });
+    nav.push({ text: `${page}/${totalPages}`, callback_data: "noop" });
+    if (page < totalPages) nav.push({ text: "➡️", callback_data: "cnt_list_" + (page + 1) });
+    buttons.push(nav);
+  }
+  buttons.push([{ text: "➕ إضافة محتوى", callback_data: "cnt_add" }]);
+  buttons.push([{ text: "🔙 رجوع", callback_data: "admin_content" }]);
+  return { text, keyboard: { inline_keyboard: buttons } };
+}
+
+function contentDetailMenu(id) {
+  const item = data.content?.items?.[id];
+  if (!item) return null;
+  const typeIcon = { text: "📝", photo: "🖼️", video: "🎥", mixed: "📦" }[item.type] || "📄";
+  const statusIcon = item.status === "published" ? "✅ منشور" : "📝 مسودة";
+  const partsInfo = (item.parts || []).map((p, i) => {
+    if (p.type === "text") return `  ${i + 1}. 📝 نص (${p.content?.length || 0} حرف)`;
+    if (p.type === "photo") return `  ${i + 1}. 🖼️ صورة${p.caption ? " + تعليق" : ""}`;
+    if (p.type === "video") return `  ${i + 1}. 🎥 فيديو${p.caption ? " + تعليق" : ""}`;
+    return `  ${i + 1}. 📄 وسائط`;
+  }).join("\n");
+
+  const botUsername = data.content?.botUsername || "niswangybot";
+  const publishText = buildPublishText(item, botUsername);
+
+  return {
+    text: `${typeIcon} <b>${item.title}</b>\n\n🔢 <b>رقم المحتوى:</b> <code>${id}</code>\n📌 <b>الحالة:</b> ${statusIcon}\n📅 <b>التاريخ:</b> ${formatDate(item.createdAt)}\n\n📦 <b>الأجزاء (${(item.parts || []).length}):</b>\n${partsInfo || "  لا يوجد محتوى"}\n\n─────────────────\n📢 <b>نص النشر:</b>\n<code>${publishText}</code>`,
+    keyboard: {
+      inline_keyboard: [
+        [
+          { text: "📤 نشر على القناة", callback_data: "cnt_publish_" + id },
+          { text: "📋 نسخ نص النشر", callback_data: "cnt_copy_" + id },
+        ],
+        [
+          { text: "▶️ معاينة المحتوى", callback_data: "cnt_preview_" + id },
+          { text: "➕ إضافة جزء", callback_data: "cnt_addpart_" + id },
+        ],
+        [
+          { text: "✏️ تعديل العنوان", callback_data: "cnt_edittitle_" + id },
+          { text: "🗑️ حذف المحتوى", callback_data: "cnt_delete_" + id },
+        ],
+        [{ text: "🔙 رجوع للقائمة", callback_data: "cnt_list_1" }],
+      ],
+    },
+  };
+}
+
+function buildPublishText(item, botUsername) {
+  const bot = botUsername || "niswangybot";
+  return `📌 ${item.title}
+
+🔐 المقطع كامل على @${bot}
+ادخل للبوت ثم اضغط زر 🔍 البحث واكتب:
+( ${item.id} )
+
+أو ادخل مباشرةً 👇
+https://t.me/${bot}?start=share_${item.id}`;
+}
+
+async function deliverContent(chatId, contentId, token) {
+  const item = data.content?.items?.[contentId];
+  if (!item || !item.parts || item.parts.length === 0) {
+    await sendMessage(chatId, `❌ لم يتم العثور على محتوى بالرقم <code>${contentId}</code>.`, token);
+    return false;
+  }
+  await sendMessage(chatId, `📦 <b>${item.title}</b>\n🔢 <code>${item.id}</code>`, token, {
+    reply_markup: getUserKeyboard(),
+  });
+  for (const part of item.parts) {
+    if (part.type === "text") {
+      await sendMessage(chatId, part.content, token);
+    } else if (part.type === "photo") {
+      await sendPhoto(chatId, part.fileId, part.caption || "", token);
+    } else if (part.type === "video") {
+      await sendVideo(chatId, part.fileId, part.caption || "", token);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return true;
+}
+
 function forcedSubscriptionSettingsMenu() {
   const fs = data.forcedSubscription;
   return {
@@ -1117,6 +1280,23 @@ function forcedSubscriptionSettingsMenu() {
   };
 }
 
+function getUserKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "🔍 البحث عن محتوى" }, { text: "📞 تواصل معنا" }],
+    ],
+    resize_keyboard: true,
+    persistent: true,
+  };
+}
+
+function generateContentId() {
+  if (!data.content) data.content = { items: {}, nextId: 10000 };
+  const id = String(data.content.nextId || 10000).padStart(5, "0");
+  data.content.nextId = (data.content.nextId || 10000) + 1;
+  return id;
+}
+
 function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   const w = data.welcome;
   if (isRejected)
@@ -1125,6 +1305,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       mediaType: null,
       mediaFileId: null,
       buttons: null,
+      userKeyboard: null,
     };
   if (isPending)
     return {
@@ -1132,6 +1313,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       mediaType: null,
       mediaFileId: null,
       buttons: null,
+      userKeyboard: null,
     };
   if (isVerified || !data.verification.enabled)
     return {
@@ -1139,6 +1321,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       mediaType: null,
       mediaFileId: null,
       buttons: null,
+      userKeyboard: getUserKeyboard(),
     };
   const buttons = [];
   if (isNewUser || (!isVerified && data.verification.enabled)) {
@@ -1149,6 +1332,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
     mediaType: w.mediaType,
     mediaFileId: w.mediaFileId,
     buttons,
+    userKeyboard: null,
   };
 }
 
@@ -1253,11 +1437,9 @@ async function handleUpdate(update, env) {
           },
         });
       } else {
-        await sendMessage(
-          chatId,
-          "📦 <b>مرحباً!</b>\n\nيمكنك الآن استخدام البوت.",
-          token,
-        );
+        await sendMessage(chatId, "📦 <b>مرحباً!</b>\n\nيمكنك الآن استخدام البوت.", token, {
+          reply_markup: getUserKeyboard(),
+        });
       }
       await answerCallback(q.id, "", token);
       return;
@@ -1267,14 +1449,9 @@ async function handleUpdate(update, env) {
       const fsOk = await checkForcedSubscription(userId, token);
       if (fsOk) {
         const welcome = getWelcomeForUser(false, false, true, false);
-        await sendMedia(
-          chatId,
-          welcome.mediaType,
-          welcome.mediaFileId,
-          welcome.text,
-          token,
-          { reply_markup: { remove_keyboard: true } },
-        );
+        await sendMedia(chatId, welcome.mediaType, welcome.mediaFileId, welcome.text, token, {
+          reply_markup: getUserKeyboard(),
+        });
       } else {
         await answerCallback(q.id, "❌ لم تكمل جميع الاشتراكات!", token, true);
         await showForcedSubscription(chatId, userId, token);
@@ -1500,27 +1677,16 @@ async function handleUpdate(update, env) {
     }
 
     // معالجة /start
-    if (text === "/start") {
-      await sendLog(userId, username, name, "🔄 بدء", "ضغط على /start", token);
+    if (text.startsWith("/start")) {
+      const param = text.split(" ")[1] || "";
+      await sendLog(userId, username, name, "🔄 بدء", "ضغط على /start" + (param ? " " + param : ""), token);
       const isNewUser = !data.users[userId];
-      const isPending = !!(
-        data.verification.pendingUsers && data.verification.pendingUsers[userId]
-      );
-      const isVerified = !!(
-        data.verification.verifiedUsers &&
-        data.verification.verifiedUsers[userId]
-      );
-      const isRejected = !!(
-        data.verification.rejectedUsers &&
-        data.verification.rejectedUsers[userId]
-      );
+      const isPending = !!(data.verification.pendingUsers?.[userId]);
+      const isVerified = !!(data.verification.verifiedUsers?.[userId]);
+      const isRejected = !!(data.verification.rejectedUsers?.[userId]);
 
       if (isNewUser) {
-        data.users[userId] = {
-          name,
-          username,
-          joined: new Date().toLocaleString("ar-EG"),
-        };
+        data.users[userId] = { name, username, joined: new Date().toLocaleString("ar-EG") };
       } else {
         data.users[userId].name = name;
         data.users[userId].username = username;
@@ -1528,13 +1694,22 @@ async function handleUpdate(update, env) {
       }
       await saveData(env);
 
+      // معالجة رابط المحتوى المباشر: /start share_XXXXX
+      if (param.startsWith("share_")) {
+        const contentId = param.replace("share_", "");
+        const canAccess = isVerified || !data.verification.enabled;
+        if (!canAccess) {
+          await sendMessage(chatId, "🔐 يجب إكمال التحقق أولاً للوصول للمحتوى.", token, {
+            reply_markup: { inline_keyboard: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]] },
+          });
+          return;
+        }
+        await deliverContent(chatId, contentId, token);
+        return;
+      }
+
       // فحص الاشتراك الإجباري للمستخدمين المسجلين والمحققين
-      if (
-        !isNewUser &&
-        (isVerified || !data.verification.enabled) &&
-        !isPending &&
-        !isRejected
-      ) {
+      if (!isNewUser && (isVerified || !data.verification.enabled) && !isPending && !isRejected) {
         const fsOk = await checkForcedSubscription(userId, token);
         if (!fsOk) {
           await showForcedSubscription(chatId, userId, token);
@@ -1542,26 +1717,58 @@ async function handleUpdate(update, env) {
         }
       }
 
-      const welcome = getWelcomeForUser(
-        isNewUser,
-        isPending,
-        isVerified,
-        isRejected,
-      );
-      const extra = {
-        reply_markup: welcome.buttons
-          ? { inline_keyboard: welcome.buttons }
-          : { remove_keyboard: true },
-      };
-      await sendMedia(
-        chatId,
-        welcome.mediaType,
-        welcome.mediaFileId,
-        welcome.text,
-        token,
-        extra,
-      );
+      const welcome = getWelcomeForUser(isNewUser, isPending, isVerified, isRejected);
+      let replyMarkup;
+      if (welcome.userKeyboard) {
+        replyMarkup = welcome.userKeyboard;
+      } else if (welcome.buttons && welcome.buttons.length > 0) {
+        replyMarkup = { inline_keyboard: welcome.buttons };
+      } else {
+        replyMarkup = { remove_keyboard: true };
+      }
+      await sendMedia(chatId, welcome.mediaType, welcome.mediaFileId, welcome.text, token, { reply_markup: replyMarkup });
       return;
+    }
+
+    // ===== أزرار لوحة المفاتيح للمستخدم =====
+    if (text === "🔍 البحث عن محتوى") {
+      const canAccess = data.verification.verifiedUsers?.[userId] || !data.verification.enabled;
+      if (!canAccess) {
+        await sendMessage(chatId, "🔐 يجب إكمال التحقق أولاً.", token);
+        return;
+      }
+      // حفظ حالة البحث في adminState لأنها مؤقتة فقط في الذاكرة
+      if (!adminState[userId]) adminState[userId] = { action: null, step: null, temp: {} };
+      adminState[userId] = { action: "user_content_search", step: "waiting_id", temp: {} };
+      const prompt = data.content?.searchPrompt || "🔍 أرسل رقم المحتوى المكون من 5 أرقام:";
+      await sendMessage(chatId, prompt, token, { reply_markup: getUserKeyboard() });
+      return;
+    }
+
+    if (text === "📞 تواصل معنا") {
+      const contactMsg = data.content?.contactMessage || "📞 <b>للتواصل معنا:</b>\n\nيمكنك التواصل مع الإدارة مباشرة.";
+      await sendMessage(chatId, contactMsg, token, { reply_markup: getUserKeyboard() });
+      return;
+    }
+
+    // ===== بحث المستخدم عن محتوى =====
+    {
+      const uState = adminState[userId];
+      if (uState?.action === "user_content_search" && uState.step === "waiting_id") {
+        const contentId = text.trim();
+        adminState[userId] = { action: null, step: null, temp: {} };
+        const canAccess = data.verification.verifiedUsers?.[userId] || !data.verification.enabled;
+        if (!canAccess) {
+          await sendMessage(chatId, "🔐 يجب إكمال التحقق أولاً.", token);
+          return;
+        }
+        if (!/^\d{5}$/.test(contentId)) {
+          await sendMessage(chatId, "❌ رقم المحتوى يجب أن يكون 5 أرقام بالضبط.\nمثال: <code>10001</code>", token, { reply_markup: getUserKeyboard() });
+          return;
+        }
+        await deliverContent(chatId, contentId, token);
+        return;
+      }
     }
 
     // الأوامر المخصصة
@@ -1570,35 +1777,14 @@ async function handleUpdate(update, env) {
       if (data.commands && data.commands[cmd] && data.commands[cmd].enabled) {
         await sendLog(userId, username, name, "🔹 أمر", "نفّذ /" + cmd, token);
         const cmdData = data.commands[cmd];
-
-        // فحص التحقق إذا كان الأمر يتطلبه
-        if (
-          data.verification.enabled &&
-          !data.verification.verifiedUsers?.[userId]
-        ) {
-          await sendMessage(
-            chatId,
-            "❌ هذا الأمر متاح للمستخدمين المحققين فقط.",
-            token,
-          );
+        if (data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+          await sendMessage(chatId, "❌ هذا الأمر متاح للمستخدمين المحققين فقط.", token);
           return;
         }
-
-        // إرسال محتوى الأمر (نص + وسائط اختيارية)
         if (cmdData.mediaType && cmdData.mediaFileId) {
-          await sendMedia(
-            chatId,
-            cmdData.mediaType,
-            cmdData.mediaFileId,
-            cmdData.response || cmdData.description,
-            token,
-          );
+          await sendMedia(chatId, cmdData.mediaType, cmdData.mediaFileId, cmdData.response || cmdData.description, token);
         } else {
-          await sendMessage(
-            chatId,
-            cmdData.response || "🔹 " + cmdData.description,
-            token,
-          );
+          await sendMessage(chatId, cmdData.response || "🔹 " + cmdData.description, token);
         }
         data.stats.totalCommands = (data.stats.totalCommands || 0) + 1;
         await saveData(env);
@@ -1607,7 +1793,7 @@ async function handleUpdate(update, env) {
     }
 
     // رسالة غير معروفة
-    await sendMessage(chatId, "❓ أمر غير معروف. أرسل /start للبدء.", token);
+    await sendMessage(chatId, "❓ أمر غير معروف. أرسل /start للبدء.", token, { reply_markup: getUserKeyboard() });
   }
 }
 
@@ -2160,6 +2346,201 @@ async function handleAdminInput(userId, chatId, msg, token, env) {
     return true;
   }
 
+  // ====================================================================
+  // ========== معالجة إدخال إدارة المحتوى ==========
+  // ====================================================================
+
+  // ===== إضافة محتوى — عنوان =====
+  if (state.action === "cnt_add" && state.step === "waiting_title") {
+    const title = text.trim();
+    if (!title || title.length < 2) {
+      await sendMessage(chatId, "❌ العنوان قصير جداً. أدخل عنواناً واضحاً:", token);
+      return true;
+    }
+    state.temp.title = title;
+    state.step = "waiting_parts";
+    const typePrompts = {
+      text: "📝 أرسل النص الأول للمحتوى:",
+      photo: "🖼️ أرسل الصورة الأولى (يمكنك إضافة تعليق معها):",
+      video: "🎥 أرسل الفيديو الأول (يمكنك إضافة تعليق معها):",
+      mixed: "📦 أرسل الجزء الأول (نص أو صورة أو فيديو):",
+    };
+    await sendMessage(chatId, `✅ العنوان: <b>${title}</b>\n\n${typePrompts[state.temp.type] || "أرسل الجزء الأول:"}`, token, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ إلغاء", callback_data: "cnt_part_cancel" }],
+        ],
+      },
+    });
+    return true;
+  }
+
+  // ===== إضافة محتوى — استقبال الأجزاء =====
+  if (state.action === "cnt_add" && state.step === "waiting_parts") {
+    if (!state.temp.parts) state.temp.parts = [];
+    let added = false;
+
+    if (msg.text && !msg.text.startsWith("/")) {
+      state.temp.parts.push({ type: "text", content: msg.text });
+      added = true;
+    } else if (msg.photo) {
+      const fileId = msg.photo[msg.photo.length - 1].file_id;
+      state.temp.parts.push({ type: "photo", fileId, caption: msg.caption || "" });
+      added = true;
+    } else if (msg.video) {
+      state.temp.parts.push({ type: "video", fileId: msg.video.file_id, caption: msg.caption || "" });
+      added = true;
+    }
+
+    if (!added) {
+      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، أو فيديو.", token);
+      return true;
+    }
+
+    const count = state.temp.parts.length;
+    await sendMessage(chatId, `✅ <b>تمت إضافة الجزء ${count}</b>\n\nهل تريد إضافة المزيد أم الانتهاء؟`, token, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "➕ إضافة المزيد", callback_data: "cnt_part_addmore" },
+            { text: "✅ انتهيت وحفظ", callback_data: "cnt_part_done" },
+          ],
+          [{ text: "❌ إلغاء الكل", callback_data: "cnt_part_cancel" }],
+        ],
+      },
+    });
+    return true;
+  }
+
+  // ===== إضافة جزء لمحتوى موجود =====
+  if (state.action === "cnt_addpart_existing" && state.step === "waiting_part") {
+    const contentId = state.temp.contentId;
+    const item = data.content?.items?.[contentId];
+    if (!item) { clearAdminState(userId); return true; }
+    if (!item.parts) item.parts = [];
+
+    let added = false;
+    if (msg.text && !msg.text.startsWith("/")) {
+      item.parts.push({ type: "text", content: msg.text });
+      added = true;
+    } else if (msg.photo) {
+      item.parts.push({ type: "photo", fileId: msg.photo[msg.photo.length - 1].file_id, caption: msg.caption || "" });
+      added = true;
+    } else if (msg.video) {
+      item.parts.push({ type: "video", fileId: msg.video.file_id, caption: msg.caption || "" });
+      added = true;
+    }
+
+    if (!added) {
+      await sendMessage(chatId, "❌ نوع غير مدعوم. أرسل نصاً، صورة، أو فيديو.", token);
+      return true;
+    }
+    await saveData(env);
+    clearAdminState(userId);
+    const m = contentDetailMenu(contentId);
+    await sendMessage(chatId, `✅ تمت إضافة الجزء. الإجمالي: ${item.parts.length}`, token, { reply_markup: m?.keyboard });
+    return true;
+  }
+
+  // ===== تعديل عنوان المحتوى =====
+  if (state.action === "cnt_edit_title" && state.step === "waiting_title") {
+    const newTitle = text.trim();
+    const contentId = state.temp.contentId;
+    if (!newTitle || newTitle.length < 2) {
+      await sendMessage(chatId, "❌ العنوان قصير جداً.", token);
+      return true;
+    }
+    if (data.content?.items?.[contentId]) {
+      data.content.items[contentId].title = newTitle;
+      await saveData(env);
+      const m = contentDetailMenu(contentId);
+      await sendMessage(chatId, `✅ تم تحديث العنوان إلى: <b>${newTitle}</b>`, token, { reply_markup: m?.keyboard });
+    }
+    clearAdminState(userId);
+    return true;
+  }
+
+  // ===== بحث أدمن عن محتوى =====
+  if (state.action === "cnt_admin_search" && state.step === "waiting_id") {
+    const query = text.trim();
+    clearAdminState(userId);
+    const items = Object.values(data.content?.items || {});
+    const found = items.filter((i) =>
+      i.id === query ||
+      i.title.toLowerCase().includes(query.toLowerCase())
+    );
+    if (found.length === 0) {
+      await sendMessage(chatId, `❌ لم يُعثر على محتوى بـ: <code>${query}</code>`, token);
+      return true;
+    }
+    if (found.length === 1) {
+      const m = contentDetailMenu(found[0].id);
+      await sendMessage(chatId, m.text, token, { reply_markup: m.keyboard });
+    } else {
+      const buttons = found.slice(0, 10).map((i) => [
+        { text: `${i.id} — ${i.title.substring(0, 30)}`, callback_data: "cnt_detail_" + i.id },
+      ]);
+      buttons.push([{ text: "🔙 رجوع", callback_data: "admin_content" }]);
+      await sendMessage(chatId, `🔍 وُجد ${found.length} نتيجة:`, token, { reply_markup: { inline_keyboard: buttons } });
+    }
+    return true;
+  }
+
+  // ===== تعيين قناة النشر =====
+  if (state.action === "cnt_set_channel" && state.step === "waiting_channel") {
+    const channelId = text.trim();
+    const chatInfo = await getChatInfo(channelId, token);
+    if (chatInfo) {
+      if (!data.content) data.content = {};
+      data.content.publishChannel = channelId;
+      data.content.publishChannelName = chatInfo.name;
+      await saveData(env);
+      await sendMessage(chatId, `✅ تم تعيين قناة النشر!\n📢 ${chatInfo.name}\n🔢 ${channelId}`, token);
+      const m = contentManagementMenu();
+      await editMessage(state.temp.chatId, state.temp.msgId, m.text, token, { reply_markup: m.keyboard });
+    } else {
+      await sendMessage(chatId, "❌ فشل تعيين القناة. تأكد من صحة المعرف وأن البوت أدمن فيها.", token);
+    }
+    clearAdminState(userId);
+    return true;
+  }
+
+  // ===== تعيين رسالة التواصل =====
+  if (state.action === "cnt_set_contact" && state.step === "waiting_text") {
+    if (!data.content) data.content = {};
+    data.content.contactMessage = text;
+    await saveData(env);
+    const m = contentManagementMenu();
+    await editMessage(state.temp.chatId, state.temp.msgId, m.text, token, { reply_markup: m.keyboard });
+    await sendMessage(chatId, "✅ تم تحديث رسالة التواصل.", token);
+    clearAdminState(userId);
+    return true;
+  }
+
+  // ===== تعيين رسالة البحث =====
+  if (state.action === "cnt_set_search_prompt" && state.step === "waiting_text") {
+    if (!data.content) data.content = {};
+    data.content.searchPrompt = text;
+    await saveData(env);
+    const m = contentManagementMenu();
+    await editMessage(state.temp.chatId, state.temp.msgId, m.text, token, { reply_markup: m.keyboard });
+    await sendMessage(chatId, "✅ تم تحديث رسالة البحث.", token);
+    clearAdminState(userId);
+    return true;
+  }
+
+  // ===== تعيين اسم يوزر البوت =====
+  if (state.action === "cnt_set_botusername" && state.step === "waiting_text") {
+    if (!data.content) data.content = {};
+    data.content.botUsername = text.trim().replace("@", "");
+    await saveData(env);
+    const m = contentManagementMenu();
+    await editMessage(state.temp.chatId, state.temp.msgId, m.text, token, { reply_markup: m.keyboard });
+    await sendMessage(chatId, `✅ تم تعيين يوزرنيم البوت: @${data.content.botUsername}`, token);
+    clearAdminState(userId);
+    return true;
+  }
+
   // ===== إضافة أمر =====
   if (state.action === "cmd_add" && state.step === "cmd") {
     const cmdName = text.replace(/\//g, "").trim().toLowerCase();
@@ -2708,11 +3089,9 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
       };
       delete data.verification.rejectedUsers[targetId];
       await saveData(env);
-      await sendMessage(
-        targetId,
-        "✅ تم قبول طلبك!\n\n" + data.verification.successMessage,
-        token,
-      );
+      await sendMessage(targetId, "✅ تم قبول طلبك!\n\n" + data.verification.successMessage, token, {
+        reply_markup: getUserKeyboard(),
+      });
       await editMessage(
         chatId,
         msgId,
@@ -2771,7 +3150,10 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
         `✅ <b>تم قبول المستخدم</b>\n${user.name}\n<code>${targetId}</code>`,
         token,
       );
-      await sendMessage(targetId, data.verification.successMessage, token);
+      // إرسال رسالة القبول مع لوحة مفاتيح المستخدم
+      await sendMessage(targetId, data.verification.successMessage, token, {
+        reply_markup: getUserKeyboard(),
+      });
     }
     return;
   }
@@ -3635,6 +4017,267 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
       token,
       keyboard ? { reply_markup: keyboard } : {},
     );
+    return;
+  }
+
+  // ====================================================================
+  // ========== إدارة المحتوى - كولباك ==========
+  // ====================================================================
+
+  if (cbData === "admin_content") {
+    const m = contentManagementMenu();
+    await editMessage(chatId, msgId, m.text, token, { reply_markup: m.keyboard });
+    return;
+  }
+
+  if (cbData.startsWith("cnt_list_")) {
+    const page = parseInt(cbData.replace("cnt_list_", "")) || 1;
+    const m = contentListMenu(page);
+    await editMessage(chatId, msgId, m.text, token, { reply_markup: m.keyboard });
+    return;
+  }
+
+  if (cbData.startsWith("cnt_detail_")) {
+    const id = cbData.replace("cnt_detail_", "");
+    const m = contentDetailMenu(id);
+    if (!m) { await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token); return; }
+    await editMessage(chatId, msgId, m.text, token, { reply_markup: m.keyboard });
+    return;
+  }
+
+  if (cbData === "cnt_search") {
+    state.action = "cnt_admin_search";
+    state.step = "waiting_id";
+    state.temp = { chatId, msgId };
+    await sendMessage(chatId, "🔍 أدخل رقم المحتوى (5 أرقام) للبحث عنه:", token);
+    return;
+  }
+
+  // ===== إضافة محتوى جديد =====
+  if (cbData === "cnt_add") {
+    state.action = "cnt_add";
+    state.step = "choose_type";
+    state.temp = { chatId, msgId };
+    await editMessage(chatId, msgId, "📁 <b>إضافة محتوى جديد</b>\n\nاختر نوع المحتوى:", token, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📝 نصي", callback_data: "cnt_type_text" }, { text: "🖼️ صور", callback_data: "cnt_type_photo" }],
+          [{ text: "🎥 فيديو", callback_data: "cnt_type_video" }, { text: "📦 متنوع", callback_data: "cnt_type_mixed" }],
+          [{ text: "❌ إلغاء", callback_data: "admin_content" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (cbData.startsWith("cnt_type_")) {
+    const type = cbData.replace("cnt_type_", "");
+    state.action = "cnt_add";
+    state.step = "waiting_title";
+    state.temp = { ...state.temp, type, parts: [] };
+    const typeNames = { text: "📝 نصي", photo: "🖼️ صور", video: "🎥 فيديو", mixed: "📦 متنوع" };
+    await sendMessage(chatId, `✅ النوع: ${typeNames[type]}\n\n📌 الآن أدخل <b>عنوان المحتوى</b>:`, token);
+    return;
+  }
+
+  // ===== زر انتهاء/إلغاء أثناء الإدخال =====
+  if (cbData === "cnt_part_done") {
+    if (!state.temp?.parts?.length) {
+      await sendMessage(chatId, "⚠️ لم تضف أي محتوى بعد! أرسل جزءاً على الأقل.", token);
+      return;
+    }
+    // حفظ المحتوى
+    const id = generateContentId();
+    if (!data.content.items) data.content.items = {};
+    data.content.items[id] = {
+      id,
+      title: state.temp.title,
+      type: state.temp.type,
+      parts: state.temp.parts,
+      createdAt: new Date().toISOString(),
+      status: "draft",
+    };
+    await saveData(env);
+    clearAdminState(userId);
+    const m = contentDetailMenu(id);
+    await sendMessage(chatId, `✅ <b>تم حفظ المحتوى!</b>\n\n🔢 الرقم: <code>${id}</code>\n📌 العنوان: ${data.content.items[id].title}\n📦 الأجزاء: ${state.temp.parts.length}\n\n👇 يمكنك الآن نشره أو نسخ نص النشر:`, token, { reply_markup: m?.keyboard });
+    return;
+  }
+
+  if (cbData === "cnt_part_cancel") {
+    clearAdminState(userId);
+    const m = contentManagementMenu();
+    await sendMessage(chatId, "❌ تم إلغاء إضافة المحتوى.", token, { reply_markup: m.keyboard });
+    return;
+  }
+
+  if (cbData === "cnt_part_addmore") {
+    const typePrompts = {
+      text: "📝 أرسل الجزء النصي التالي:",
+      photo: "🖼️ أرسل الصورة التالية (يمكنك إضافة تعليق):",
+      video: "🎥 أرسل الفيديو التالي (يمكنك إضافة تعليق):",
+      mixed: "📦 أرسل الجزء التالي (نص أو صورة أو فيديو):",
+    };
+    const prompt = typePrompts[state.temp?.type] || "📝 أرسل الجزء التالي:";
+    const partsCount = state.temp?.parts?.length || 0;
+    await sendMessage(chatId, `${prompt}\n\n📊 الأجزاء المضافة حتى الآن: ${partsCount}`, token, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ انتهيت", callback_data: "cnt_part_done" }],
+          [{ text: "❌ إلغاء", callback_data: "cnt_part_cancel" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  // ===== إضافة جزء لمحتوى موجود =====
+  if (cbData.startsWith("cnt_addpart_")) {
+    const id = cbData.replace("cnt_addpart_", "");
+    const item = data.content?.items?.[id];
+    if (!item) { await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token); return; }
+    state.action = "cnt_addpart_existing";
+    state.step = "waiting_part";
+    state.temp = { chatId, msgId, contentId: id, type: item.type };
+    await sendMessage(chatId, `➕ <b>إضافة جزء جديد</b>\nللمحتوى: ${item.title}\n\nأرسل الجزء (نص أو صورة أو فيديو):`, token, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ إلغاء", callback_data: "cnt_detail_" + id }],
+        ],
+      },
+    });
+    return;
+  }
+
+  // ===== معاينة المحتوى =====
+  if (cbData.startsWith("cnt_preview_")) {
+    const id = cbData.replace("cnt_preview_", "");
+    const item = data.content?.items?.[id];
+    if (!item) { await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token); return; }
+    await sendMessage(chatId, `👁️ <b>معاينة المحتوى</b>\n🔢 <code>${id}</code>`, token, { bypass_protection: true });
+    await deliverContent(chatId, id, token);
+    return;
+  }
+
+  // ===== نسخ نص النشر =====
+  if (cbData.startsWith("cnt_copy_")) {
+    const id = cbData.replace("cnt_copy_", "");
+    const item = data.content?.items?.[id];
+    if (!item) return;
+    const botUsername = data.content?.botUsername || "niswangybot";
+    const publishText = buildPublishText(item, botUsername);
+    await sendMessage(chatId, `📋 <b>نص النشر — انسخه وانشره يدوياً:</b>\n\n<code>${publishText}</code>`, token, { bypass_protection: true });
+    return;
+  }
+
+  // ===== نشر على القناة =====
+  if (cbData.startsWith("cnt_publish_")) {
+    const id = cbData.replace("cnt_publish_", "");
+    const item = data.content?.items?.[id];
+    if (!item) { await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token); return; }
+    const channelId = data.content?.publishChannel;
+    if (!channelId) {
+      await sendMessage(chatId, "❌ لم يتم تعيين قناة النشر.\nاذهب لـ إدارة المحتوى → تعيين قناة النشر.", token);
+      return;
+    }
+    const botUsername = data.content?.botUsername || "niswangybot";
+    const publishText = buildPublishText(item, botUsername);
+    const res = await telegramRequest("sendMessage", token, {
+      chat_id: channelId,
+      text: publishText,
+      parse_mode: "HTML",
+      disable_web_page_preview: false,
+    });
+    if (res.ok) {
+      item.status = "published";
+      item.publishedAt = new Date().toISOString();
+      await saveData(env);
+      await sendMessage(chatId, `✅ <b>تم النشر بنجاح!</b>\n📢 القناة: ${data.content.publishChannelName || channelId}\n🔢 رقم المحتوى: <code>${id}</code>`, token);
+      const m = contentDetailMenu(id);
+      if (m) await sendMessage(chatId, m.text, token, { reply_markup: m.keyboard });
+    } else {
+      await sendMessage(chatId, `❌ فشل النشر!\n${res.description || "تأكد أن البوت أدمن في القناة."}`, token);
+    }
+    return;
+  }
+
+  // ===== تعديل عنوان المحتوى =====
+  if (cbData.startsWith("cnt_edittitle_")) {
+    const id = cbData.replace("cnt_edittitle_", "");
+    const item = data.content?.items?.[id];
+    if (!item) return;
+    state.action = "cnt_edit_title";
+    state.step = "waiting_title";
+    state.temp = { chatId, msgId, contentId: id };
+    await sendMessage(chatId, `✏️ أدخل العنوان الجديد:\n\nالحالي: <b>${item.title}</b>`, token);
+    return;
+  }
+
+  // ===== تأكيد حذف المحتوى (يجب أن يكون قبل cnt_delete_ العام) =====
+  if (cbData.startsWith("cnt_delete_confirm_")) {
+    const id = cbData.replace("cnt_delete_confirm_", "");
+    if (data.content?.items?.[id]) {
+      const title = data.content.items[id].title;
+      delete data.content.items[id];
+      await saveData(env);
+      await sendMessage(chatId, `✅ تم حذف المحتوى:\n<code>${id}</code> — ${title}`, token);
+      const m = contentListMenu(1);
+      await editMessage(chatId, msgId, m.text, token, { reply_markup: m.keyboard });
+    }
+    return;
+  }
+
+  // ===== حذف المحتوى (طلب التأكيد) =====
+  if (cbData.startsWith("cnt_delete_")) {
+    const id = cbData.replace("cnt_delete_", "");
+    const item = data.content?.items?.[id];
+    if (!item) return;
+    await editMessage(chatId, msgId, `🗑️ <b>تأكيد الحذف</b>\n\nهل أنت متأكد من حذف:\n<code>${id}</code> — ${item.title}؟`, token, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "🗑️ نعم، احذف", callback_data: "cnt_delete_confirm_" + id },
+            { text: "❌ إلغاء", callback_data: "cnt_detail_" + id },
+          ],
+        ],
+      },
+    });
+    return;
+  }
+
+  // ===== تعيين قناة النشر =====
+  if (cbData === "cnt_set_channel") {
+    state.action = "cnt_set_channel";
+    state.step = "waiting_channel";
+    state.temp = { chatId, msgId };
+    await sendMessage(chatId, "📢 أدخل معرف قناة النشر:\n(مثال: @mychannel أو -100xxxxxxxxx)\n\nيجب أن يكون البوت أدمن فيها.", token);
+    return;
+  }
+
+  // ===== تعيين رسالة التواصل =====
+  if (cbData === "cnt_set_contact") {
+    state.action = "cnt_set_contact";
+    state.step = "waiting_text";
+    state.temp = { chatId, msgId };
+    await sendMessage(chatId, `✏️ أدخل رسالة التواصل الجديدة:\n(يمكنك استخدام HTML)\n\nالحالية:\n${data.content?.contactMessage || "غير محددة"}`, token);
+    return;
+  }
+
+  // ===== تعيين رسالة البحث =====
+  if (cbData === "cnt_set_search_prompt") {
+    state.action = "cnt_set_search_prompt";
+    state.step = "waiting_text";
+    state.temp = { chatId, msgId };
+    await sendMessage(chatId, `✏️ أدخل رسالة طلب رقم المحتوى:\n\nالحالية:\n${data.content?.searchPrompt || "غير محددة"}`, token);
+    return;
+  }
+
+  // ===== اسم اليوزر للبوت =====
+  if (cbData === "cnt_set_botusername") {
+    state.action = "cnt_set_botusername";
+    state.step = "waiting_text";
+    state.temp = { chatId, msgId };
+    await sendMessage(chatId, `🤖 أدخل يوزرنيم البوت (بدون @):\n\nالحالي: ${data.content?.botUsername || "niswangybot"}`, token);
     return;
   }
 
