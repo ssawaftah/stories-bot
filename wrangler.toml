@@ -7,6 +7,6 @@ binding = "KV_NAMESPACE"
 id = "bd1fd9cab9474d2b8f1db0821331850a"
 
 [vars]
-BOT_TOKEN = "8907171536:AAHA3f6W5o8jazlOpU4K-Eu1h-dMtknBdAs"
+BOT_TOKEN = "7953007400:AAEu0x_dOmB8xAS8KVujX4kl50kOFu4zQa4"
 ADMIN_ID = "6455001010"
 LOG_CHANNEL_ID = "-1004317441790"  # ضع معرف القناة الرقمي هنا
