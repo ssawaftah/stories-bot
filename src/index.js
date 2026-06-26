@@ -4,45 +4,13 @@
 
 let data = {
   welcome: {
-    text: '🎉 مرحباً بك في البوت!\n\nاختر ما تريد:',
+    text: '🎉 مرحباً بك في البوت!',
     buttons: []
   },
   commands: {}
 };
 
 const adminState = { action: null, step: null, temp: {} };
-const KV_KEYS = {
-  WELCOME: 'bot_welcome',
-  COMMANDS: 'bot_commands'
-};
-
-// ====================================================================
-// ========== دوال KV ==========
-// ====================================================================
-
-async function loadData(env) {
-  try {
-    const welcome = await env.KV_NAMESPACE.get(KV_KEYS.WELCOME, 'json');
-    if (welcome) data.welcome = welcome;
-    
-    const commands = await env.KV_NAMESPACE.get(KV_KEYS.COMMANDS, 'json');
-    if (commands) data.commands = commands;
-    
-    console.log('✅ Data loaded');
-  } catch (error) {
-    console.error('Error loading data:', error);
-  }
-}
-
-async function saveData(env) {
-  try {
-    await env.KV_NAMESPACE.put(KV_KEYS.WELCOME, JSON.stringify(data.welcome));
-    await env.KV_NAMESPACE.put(KV_KEYS.COMMANDS, JSON.stringify(data.commands));
-    console.log('✅ Data saved');
-  } catch (error) {
-    console.error('Error saving data:', error);
-  }
-}
 
 // ====================================================================
 // ========== دوال مساعدة ==========
@@ -174,7 +142,6 @@ function getUserWelcome() {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    await loadData(env);
     
     if (url.pathname === '/') {
       return new Response('Bot running!');
@@ -187,7 +154,7 @@ export default {
         return new Response('OK', { status: 200 });
       } catch (e) {
         console.error('Webhook error:', e);
-        return new Response('Error', { status: 500 });
+        return new Response('Error: ' + e.message, { status: 500 });
       }
     }
     
@@ -231,6 +198,8 @@ async function handleUpdate(update, env) {
     if (userId === ADMIN) {
       await handleAdminCallback(cbData, chatId, msgId, token, env);
       await answerCallback(q.id, '✅', token);
+    } else {
+      await sendMessage(chatId, '⚠️ هذا الإجراء للأدمن فقط', token);
     }
     return;
   }
@@ -247,7 +216,6 @@ async function handleUpdate(update, env) {
       // تعديل نص الترحيب
       if (adminState.action === 'edit_welcome' && adminState.step === 'text') {
         data.welcome.text = text;
-        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = welcomeMenu();
@@ -260,9 +228,7 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'add_btn' && adminState.step === 'text') {
         adminState.temp.btnText = text;
         adminState.step = 'action';
-        await sendMessage(chatId, '📝 **أدخل الإجراء للزر:**', token, {
-          reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-        });
+        await sendMessage(chatId, '📝 **أدخل الإجراء للزر:**', token);
         return;
       }
       
@@ -270,7 +236,6 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'add_btn' && adminState.step === 'action') {
         if (!data.welcome.buttons) data.welcome.buttons = [];
         data.welcome.buttons.push({ text: adminState.temp.btnText, action: text });
-        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = welcomeMenu();
@@ -283,9 +248,7 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'cmd_add' && adminState.step === 'cmd') {
         adminState.temp.cmd = text;
         adminState.step = 'desc';
-        await sendMessage(chatId, '📝 **أدخل وصف الأمر:**', token, {
-          reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-        });
+        await sendMessage(chatId, '📝 **أدخل وصف الأمر:**', token);
         return;
       }
       
@@ -293,7 +256,6 @@ async function handleUpdate(update, env) {
       if (adminState.action === 'cmd_add' && adminState.step === 'desc') {
         if (!data.commands) data.commands = {};
         data.commands[adminState.temp.cmd] = { description: text, enabled: true };
-        await saveData(env);
         adminState.action = null;
         adminState.step = null;
         const menu = commandsMenu();
@@ -308,9 +270,7 @@ async function handleUpdate(update, env) {
         if (data.commands && data.commands[cmd]) {
           adminState.temp.editCmd = cmd;
           adminState.step = 'desc';
-          await sendMessage(chatId, '📝 **أدخل الوصف الجديد لـ /' + cmd + ':**\n\nالحالي: ' + data.commands[cmd].description, token, {
-            reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-          });
+          await sendMessage(chatId, '📝 **أدخل الوصف الجديد لـ /' + cmd + ':**\n\nالحالي: ' + data.commands[cmd].description, token);
         } else {
           await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
         }
@@ -322,7 +282,6 @@ async function handleUpdate(update, env) {
         const cmd = adminState.temp.editCmd;
         if (data.commands && data.commands[cmd]) {
           data.commands[cmd].description = text;
-          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           const menu = commandsMenu();
@@ -337,7 +296,6 @@ async function handleUpdate(update, env) {
         const cmd = text.replace('/', '');
         if (data.commands && data.commands[cmd]) {
           delete data.commands[cmd];
-          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           const menu = commandsMenu();
@@ -354,7 +312,6 @@ async function handleUpdate(update, env) {
         const cmd = text.replace('/', '');
         if (data.commands && data.commands[cmd]) {
           data.commands[cmd].enabled = !data.commands[cmd].enabled;
-          await saveData(env);
           adminState.action = null;
           adminState.step = null;
           const menu = commandsMenu();
@@ -414,9 +371,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'edit_welcome';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل نص الترحيب الجديد:**\n\nالحالي:\n' + data.welcome.text, token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل نص الترحيب الجديد:**\n\nالحالي:\n' + data.welcome.text, token);
     return;
   }
   
@@ -424,9 +379,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'add_btn';
     adminState.step = 'text';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل نص الزر:**', token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل نص الزر:**', token);
     return;
   }
   
@@ -450,8 +403,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     const btns = data.welcome.buttons || [];
     if (idx >= 0 && idx < btns.length) {
       btns.splice(idx, 1);
-      data.welcome.buttons = btns;
-      await saveData(env);
     }
     const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -482,9 +433,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     adminState.action = 'cmd_add';
     adminState.step = 'cmd';
     adminState.temp = { chatId: chatId, msgId: msgId };
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر الجديد:**\n(بدون /)', token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر الجديد:**\n(بدون /)', token);
     return;
   }
   
@@ -497,9 +446,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتعديل:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتعديل:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
@@ -512,9 +459,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للحذف:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للحذف:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
@@ -527,9 +472,7 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
       return;
     }
-    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتفعيل/التعطيل:**\n\n' + all.map(c => '• /' + c).join('\n'), token, {
-      reply_markup: { keyboard: [[{ text: '🔙 إلغاء' }]], resize_keyboard: true }
-    });
+    await sendMessage(chatId, '📝 **أدخل اسم الأمر للتفعيل/التعطيل:**\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
   
