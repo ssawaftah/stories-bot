@@ -1,5 +1,5 @@
 // ====================================================================
-// ========== بوت تيليجرام مع حفظ البيانات في KV ==========
+// ========== بوت تيليجرام المتكامل ==========
 // ====================================================================
 
 // ========== البيانات الافتراضية ==========
@@ -21,7 +21,8 @@ const DEFAULT_DATA = {
     pendingUsers: {}
   },
   protection: {
-    enabled: false
+    enabled: false,
+    // عند التفعيل، سيتم منع النسخ والحفظ والتوجيه
   },
   notifications: {
     enabled: false,
@@ -35,11 +36,26 @@ const DEFAULT_DATA = {
     registeredMessage: '📦 <b>مرحباً بعودتك!</b>\n\nيمكنك استخدام البوت الآن.'
   },
   commands: {},
-  users: {},
-  content: {}
+  users: {}, // { userId: { name, username, phone, country, joined, lastUsed } }
+  content: {},
+  // ===== قسم الاشتراك الإجباري =====
+  forcedSubscription: {
+    enabled: false,
+    list: [], // [{ id, type, name, link, enabled, order, message, maxUsers }]
+    settings: {
+      notification: false,
+      displayMode: 'grouped', // 'grouped' | 'separate'
+      verifyButtonText: 'تحقق ✅',
+      groupedMessage: '📢 <b>يجب عليك الاشتراك في القنوات التالية:</b>',
+      checkInterval: 3, // ثواني للتحقق من الروابط
+    },
+    // تخزين مؤقت لتتبع المستخدمين الذين أكملوا الاشتراك
+    userStatus: {} // { userId: { completed: true, timestamp } }
+  }
 };
 
 let data = {};
+const adminState = { action: null, step: null, temp: {} };
 
 // ====================================================================
 // ========== دوال KV ==========
@@ -75,19 +91,27 @@ async function saveData(env) {
 // ========== دوال مساعدة ==========
 // ====================================================================
 
-const adminState = { action: null, step: null, temp: {} };
-
 async function sendMessage(chatId, text, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/sendMessage';
-  const payload = { 
-    chat_id: chatId, 
-    text: text, 
+  const payload = {
+    chat_id: chatId,
+    text: text,
     parse_mode: 'HTML',
-    reply_markup: { remove_keyboard: true }
+    reply_markup: { remove_keyboard: true },
+    // حماية المحتوى: منع النسخ والتوجيه
+    ...(data.protection.enabled ? {
+      disable_notification: false,
+      protect_content: true,
+      allow_sending_without_reply: true,
+    } : {})
   };
   if (extra) {
     if (extra.reply_markup) {
       payload.reply_markup = extra.reply_markup;
+    }
+    // السماح بتجاوز الحماية للرسائل الإدارية
+    if (extra.bypass_protection) {
+      delete payload.protect_content;
     }
     Object.assign(payload, extra);
   }
@@ -106,16 +130,22 @@ async function sendMessage(chatId, text, token, extra) {
 
 async function sendPhoto(chatId, fileId, caption, token, extra) {
   const url = 'https://api.telegram.org/bot' + token + '/sendPhoto';
-  const payload = { 
-    chat_id: chatId, 
-    photo: fileId, 
+  const payload = {
+    chat_id: chatId,
+    photo: fileId,
     caption: caption || '',
     parse_mode: 'HTML',
-    reply_markup: { remove_keyboard: true }
+    reply_markup: { remove_keyboard: true },
+    ...(data.protection.enabled ? {
+      protect_content: true,
+    } : {})
   };
   if (extra) {
     if (extra.reply_markup) {
       payload.reply_markup = extra.reply_markup;
+    }
+    if (extra.bypass_protection) {
+      delete payload.protect_content;
     }
     Object.assign(payload, extra);
   }
@@ -184,6 +214,25 @@ async function getChatInfo(chatId, token) {
   }
 }
 
+async function getChatMember(chatId, userId, token) {
+  const url = 'https://api.telegram.org/bot' + token + '/getChatMember';
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, user_id: userId })
+    });
+    const result = await res.json();
+    if (result.ok && result.result) {
+      return result.result;
+    }
+    return null;
+  } catch (e) {
+    console.error('Error getting chat member:', e);
+    return null;
+  }
+}
+
 async function updateBotCommands(token) {
   const url = 'https://api.telegram.org/bot' + token + '/setMyCommands';
   const commands = [{ command: 'start', description: 'بدء استخدام البوت' }];
@@ -221,11 +270,11 @@ function setLogEnabled(enabled) {
 
 async function sendLog(userId, username, name, action, details, token) {
   if (!logEnabled || !logChannelId) return;
-  
+
   const now = new Date();
   const date = now.toLocaleDateString('ar-EG');
   const time = now.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  
+
   const message = `
 📋 <b>سجل الإجراءات</b>
 
@@ -253,6 +302,115 @@ async function sendLog(userId, username, name, action, details, token) {
 }
 
 // ====================================================================
+// ========== دوال الاشتراك الإجباري ==========
+// ====================================================================
+
+async function checkForcedSubscription(userId, token) {
+  const fs = data.forcedSubscription;
+  if (!fs.enabled || !fs.list || fs.list.length === 0) return true;
+
+  // التحقق من المستخدمين الذين أكملوا الاشتراك مسبقاً
+  if (fs.userStatus && fs.userStatus[userId] && fs.userStatus[userId].completed) {
+    return true;
+  }
+
+  // قائمة الاشتراكات النشطة
+  const activeSubs = fs.list.filter(s => s.enabled !== false);
+  if (activeSubs.length === 0) return true;
+
+  // التحقق من كل اشتراك
+  let allSubscribed = true;
+  for (const sub of activeSubs) {
+    const subscribed = await checkSingleSubscription(userId, sub, token);
+    if (!subscribed) {
+      allSubscribed = false;
+      break;
+    }
+  }
+
+  if (allSubscribed) {
+    // تسجيل أن المستخدم أكمل الاشتراك
+    if (!fs.userStatus) fs.userStatus = {};
+    fs.userStatus[userId] = { completed: true, timestamp: Date.now() };
+    // إرسال إشعار للمشرف إذا كان مفعلاً
+    if (fs.settings.notification) {
+      const user = data.users[userId] || {};
+      await sendLog(userId, user.username, user.name, '✅ اشتراك إجباري', 'أكمل المستخدم جميع الاشتراكات', token);
+    }
+    return true;
+  }
+
+  return false;
+}
+
+async function checkSingleSubscription(userId, sub, token) {
+  try {
+    if (sub.type === 'channel' || sub.type === 'group') {
+      // التحقق من العضوية في القناة/المجموعة
+      const member = await getChatMember(sub.id, userId, token);
+      if (member && (member.status === 'member' || member.status === 'administrator' || member.status === 'creator')) {
+        return true;
+      }
+      return false;
+    } else if (sub.type === 'bot') {
+      // التحقق من أن المستخدم شغل البوت
+      // نستخدم طريقة getChatMember على البوت نفسه (البوت المستهدف)
+      try {
+        const member = await getChatMember(sub.id, userId, token);
+        if (member && (member.status === 'member' || member.status === 'restricted')) {
+          return true;
+        }
+        return false;
+      } catch (e) {
+        return false;
+      }
+    } else if (sub.type === 'link') {
+      // الروابط تحتاج إلى تأكيد يدوي من المستخدم
+      // نتحقق من وجود مؤقت أن المستخدم أكمل الرابط
+      if (data.forcedSubscription.userStatus && data.forcedSubscription.userStatus[userId] &&
+          data.forcedSubscription.userStatus[userId].links && data.forcedSubscription.userStatus[userId].links[sub.id]) {
+        const linkStatus = data.forcedSubscription.userStatus[userId].links[sub.id];
+        if (linkStatus.completed && (Date.now() - linkStatus.timestamp < 3600000)) { // ساعة واحدة صلاحية
+          return true;
+        }
+      }
+      return false;
+    }
+    return true; // افتراضي
+  } catch (e) {
+    console.error('Error checking subscription:', e);
+    return false;
+  }
+}
+
+function getForcedSubscriptionKeyboard(userId) {
+  const fs = data.forcedSubscription;
+  const activeSubs = fs.list.filter(s => s.enabled !== false);
+  if (activeSubs.length === 0) return null;
+
+  if (fs.settings.displayMode === 'separate') {
+    // الوضع المنفصل: نرسل كل اشتراك على حدة (يتم التعامل معه في مكان آخر)
+    return null;
+  }
+
+  // الوضع المجمع: زر واحد للتحقق
+  const buttons = [];
+  for (const sub of activeSubs) {
+    let label = '';
+    if (sub.type === 'channel') label = '📢 ' + (sub.name || 'قناة');
+    else if (sub.type === 'group') label = '👥 ' + (sub.name || 'مجموعة');
+    else if (sub.type === 'bot') label = '🤖 ' + (sub.name || 'بوت');
+    else if (sub.type === 'link') label = '🔗 ' + (sub.name || 'رابط');
+    else label = '❓ ' + (sub.name || 'اشتراك');
+    buttons.push([{ text: label, url: sub.link || 'https://t.me/' }]);
+  }
+  // زر التحقق
+  buttons.push([{ text: fs.settings.verifyButtonText || 'تحقق ✅', callback_data: 'check_subscription' }]);
+
+  return { inline_keyboard: buttons };
+}
+
+// ====================================================================
 // ========== دوال إنشاء القوائم ==========
 // ====================================================================
 
@@ -263,7 +421,9 @@ function adminMenu() {
       inline_keyboard: [
         [{ text: '⚙️ الإعدادات', callback_data: 'admin_settings' }],
         [{ text: '✏️ رسالة الترحيب', callback_data: 'admin_welcome' }],
-        [{ text: '📋 إدارة الأوامر', callback_data: 'admin_commands' }]
+        [{ text: '📋 إدارة الأوامر', callback_data: 'admin_commands' }],
+        [{ text: '👥 المستخدمين', callback_data: 'admin_users' }],
+        [{ text: '🔗 الاشتراك الإجباري', callback_data: 'admin_forced_subscription' }]
       ]
     }
   };
@@ -276,7 +436,8 @@ function settingsMenu() {
   const protectStatus = data.protection.enabled ? '🔒 الحماية مفعلة' : '🔓 الحماية معطلة';
   const notifStatus = data.notifications.enabled ? '🔔 الإشعارات مفعلة' : '🔕 الإشعارات معطلة';
   const notifChannel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
-  
+  const fsStatus = data.forcedSubscription.enabled ? '🟩 مفعل' : '🟥 معطل';
+
   return {
     text: '⚙️ <b>الإعدادات</b>\n\n' +
           '🤖 <b>حالة البوت:</b> ' + botStatus + '\n' +
@@ -284,7 +445,8 @@ function settingsMenu() {
           '📢 <b>قناة التحقق:</b> ' + verChannel + '\n' +
           '🔒 <b>حماية المحتوى:</b> ' + protectStatus + '\n' +
           '🔔 <b>الإشعارات:</b> ' + notifStatus + '\n' +
-          '📢 <b>قناة الإشعارات:</b> ' + notifChannel + '\n\n' +
+          '📢 <b>قناة الإشعارات:</b> ' + notifChannel + '\n' +
+          '🔗 <b>الاشتراك الإجباري:</b> ' + fsStatus + '\n\n' +
           '🔹 اختر القسم:',
     keyboard: {
       inline_keyboard: [
@@ -292,6 +454,7 @@ function settingsMenu() {
         [{ text: '✅ التحقق من العضوية', callback_data: 'settings_verification' }],
         [{ text: '🔒 حماية المحتوى', callback_data: 'settings_protection' }],
         [{ text: '🔔 الإشعارات', callback_data: 'settings_notifications' }],
+        [{ text: '🔗 الاشتراك الإجباري', callback_data: 'settings_forced_subscription' }],
         [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
       ]
     }
@@ -316,7 +479,7 @@ function verificationMenu() {
   const v = data.verification;
   const status = v.enabled ? '🟩 نشط' : '🟥 متوقف';
   const channel = v.channelName || v.channelId || 'غير محدد';
-  
+
   return {
     text: '✅ <b>التحقق من العضوية</b>\n\n📌 الحالة: ' + status + '\n📢 قناة التحقق: ' + channel + '\n\n🔹 اختر الإجراء:',
     keyboard: {
@@ -351,7 +514,7 @@ function verificationListMenu() {
   const v = data.verification;
   const verified = Object.keys(v.verifiedUsers || {});
   const rejected = Object.keys(v.rejectedUsers || {});
-  
+
   return {
     text: '📋 <b>قائمة التحقق</b>\n\n✅ المحققين: ' + verified.length + '\n❌ المرفوضين: ' + rejected.length,
     keyboard: {
@@ -369,7 +532,7 @@ function verificationListMenu() {
 function protectionMenu() {
   const status = data.protection.enabled ? '🔒 الحماية مفعلة' : '🔓 الحماية معطلة';
   return {
-    text: '🔒 <b>حماية المحتوى</b>\n\n📌 الحالية: ' + status + '\n\nعند التفعيل، سيمنع المستخدمون من حفظ رسائل البوت وتوجيهها.',
+    text: '🔒 <b>حماية المحتوى</b>\n\n📌 الحالية: ' + status + '\n\nعند التفعيل، سيمنع المستخدمون من نسخ النصوص، حفظ الصور والفيديوهات، وتوجيه الرسائل.',
     keyboard: {
       inline_keyboard: [
         [{ text: '🔄 ' + (data.protection.enabled ? 'تعطيل' : 'تفعيل') + ' الحماية', callback_data: 'protect_toggle' }],
@@ -382,7 +545,7 @@ function protectionMenu() {
 function notificationsMenu() {
   const status = data.notifications.enabled ? '🔔 مفعل' : '🔕 معطل';
   const channel = data.notifications.channelName || data.notifications.channelId || 'غير محدد';
-  
+
   return {
     text: '🔔 <b>الإشعارات والأحداثيات</b>\n\n📌 الحالة: ' + status + '\n📢 القناة: ' + channel + '\n\nعند التفعيل، ستصل جميع إجراءات المستخدمين إلى القناة المحددة.',
     keyboard: {
@@ -399,7 +562,7 @@ function welcomeMenu() {
   const w = data.welcome;
   const hasImage = w.image ? '🟢 موجودة' : '🔴 غير موجودة';
   const htmlStatus = w.useHtml ? '🟢 مفعل' : '🔴 معطل';
-  
+
   return {
     text: '✏️ <b>رسالة الترحيب</b>\n\n' +
           '📝 <b>النص:</b>\n' + w.text + '\n\n' +
@@ -432,7 +595,7 @@ function commandsMenu() {
     });
   }
   text += '\n🔹 اختر الإجراء:';
-  
+
   return {
     text: text,
     keyboard: {
@@ -447,10 +610,145 @@ function commandsMenu() {
   };
 }
 
+// ===== قسم المستخدمين =====
+function usersMenu() {
+  const users = Object.keys(data.users || {});
+  return {
+    text: '👥 <b>إدارة المستخدمين</b>\n\n📌 إجمالي المستخدمين: ' + users.length + '\n\n🔹 اختر الإجراء:',
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '📋 عرض جميع المستخدمين', callback_data: 'users_list' }],
+        [{ text: '🗑️ حذف مستخدم', callback_data: 'users_delete' }],
+        [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+      ]
+    }
+  };
+}
+
+function usersListMenu(page) {
+  const users = Object.keys(data.users || {});
+  const total = users.length;
+  const perPage = 10;
+  const totalPages = Math.ceil(total / perPage) || 1;
+  const start = (page - 1) * perPage;
+  const end = Math.min(start + perPage, total);
+  const pageUsers = users.slice(start, end);
+
+  let text = '👥 <b>قائمة المستخدمين</b>\n\n';
+  if (total === 0) {
+    text += 'لا يوجد مستخدمين.';
+  } else {
+    text += '📌 الصفحة ' + page + ' من ' + totalPages + '\n\n';
+    for (const uid of pageUsers) {
+      const u = data.users[uid];
+      text += '👤 <b>' + (u.name || 'غير معروف') + '</b>\n';
+      text += '🆔 ' + uid + '\n';
+      if (u.username) text += '📍 @' + u.username + '\n';
+      if (u.phone) text += '📱 ' + u.phone + '\n';
+      if (u.country) text += '🌍 ' + u.country + '\n';
+      if (u.joined) text += '📅 انضم: ' + u.joined + '\n';
+      if (u.lastUsed) text += '🕐 آخر استخدام: ' + u.lastUsed + '\n';
+      text += '─────────────────\n';
+    }
+  }
+
+  const buttons = [];
+  if (totalPages > 1) {
+    const nav = [];
+    if (page > 1) nav.push({ text: '⬅️', callback_data: 'users_page_' + (page - 1) });
+    nav.push({ text: page + '/' + totalPages, callback_data: 'users_page_' + page });
+    if (page < totalPages) nav.push({ text: '➡️', callback_data: 'users_page_' + (page + 1) });
+    buttons.push(nav);
+  }
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_users' }]);
+
+  return { text, keyboard: { inline_keyboard: buttons } };
+}
+
+function usersDeleteMenu() {
+  const users = Object.keys(data.users || {});
+  if (users.length === 0) {
+    return {
+      text: '⚠️ لا يوجد مستخدمين للحذف.',
+      keyboard: { inline_keyboard: [[{ text: '🔙 رجوع', callback_data: 'admin_users' }]] }
+    };
+  }
+  const buttons = users.map(uid => {
+    const u = data.users[uid];
+    return [{ text: '🗑️ ' + (u.name || uid), callback_data: 'users_delete_confirm_' + uid }];
+  });
+  buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_users' }]);
+  return {
+    text: '🗑️ <b>اختر مستخدم للحذف:</b>',
+    keyboard: { inline_keyboard: buttons }
+  };
+}
+
+// ===== قسم الاشتراك الإجباري =====
+function forcedSubscriptionMenu() {
+  const fs = data.forcedSubscription;
+  const status = fs.enabled ? '🟢 مفعل' : '🔴 معطل';
+  const count = (fs.list || []).length;
+  let listText = 'لا توجد اشتراكات.';
+  if (count > 0) {
+    listText = '';
+    fs.list.forEach((s, i) => {
+      const icon = s.enabled !== false ? '✅' : '❌';
+      listText += (i+1) + '. ' + icon + ' ' + (s.name || s.type) + ' (' + s.type + ')\n';
+    });
+  }
+
+  return {
+    text: '🔗 <b>الاشتراك الإجباري</b>\n\n' +
+          '📌 الحالة: ' + status + '\n' +
+          '📋 عدد الاشتراكات: ' + count + '\n\n' +
+          '━━━ <b>قائمة الاشتراكات</b> ━━━\n' +
+          listText + '\n' +
+          '━━━ <b>الإعدادات</b> ━━━\n' +
+          '🔔 الإشعار: ' + (fs.settings.notification ? '🟢 مفعل' : '🔴 معطل') + '\n' +
+          '📋 طريقة العرض: ' + (fs.settings.displayMode === 'grouped' ? 'مجمعة' : 'منفصلة') + '\n' +
+          '🔘 زر التحقق: ' + fs.settings.verifyButtonText + '\n' +
+          '✏️ رسالة العرض: ' + (fs.settings.groupedMessage || 'غير محددة') + '\n\n' +
+          '🔹 اختر الإجراء:',
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '🔄 ' + (fs.enabled ? 'تعطيل' : 'تفعيل') + ' الكل', callback_data: 'fs_toggle_all' }],
+        [{ text: '➕ إضافة اشتراك', callback_data: 'fs_add' }],
+        [{ text: '✏️ تعديل اشتراك', callback_data: 'fs_edit' }],
+        [{ text: '🗑️ حذف اشتراك', callback_data: 'fs_delete' }],
+        [{ text: '⚙️ إعدادات الاشتراك', callback_data: 'fs_settings' }],
+        [{ text: '👁️ معاينة البوابة', callback_data: 'fs_preview' }],
+        [{ text: '🔙 رجوع', callback_data: 'admin_back' }]
+      ]
+    }
+  };
+}
+
+function forcedSubscriptionSettingsMenu() {
+  const fs = data.forcedSubscription;
+  return {
+    text: '⚙️ <b>إعدادات الاشتراك الإجباري</b>\n\n' +
+          '🔔 الإشعار: ' + (fs.settings.notification ? '🟢 مفعل' : '🔴 معطل') + '\n' +
+          '📋 طريقة العرض: ' + (fs.settings.displayMode === 'grouped' ? 'مجمعة' : 'منفصلة') + '\n' +
+          '🔘 زر التحقق: ' + fs.settings.verifyButtonText + '\n' +
+          '✏️ رسالة العرض المجمع: \n' + (fs.settings.groupedMessage || 'غير محددة') + '\n\n' +
+          '🔹 اختر الإجراء:',
+    keyboard: {
+      inline_keyboard: [
+        [{ text: '🔔 ' + (fs.settings.notification ? 'تعطيل' : 'تفعيل') + ' الإشعار', callback_data: 'fs_setting_notification' }],
+        [{ text: '📋 تغيير طريقة العرض', callback_data: 'fs_setting_display' }],
+        [{ text: '✏️ تعديل زر التحقق', callback_data: 'fs_setting_verify_text' }],
+        [{ text: '✏️ تعديل رسالة العرض', callback_data: 'fs_setting_grouped_message' }],
+        [{ text: '🔙 رجوع', callback_data: 'admin_forced_subscription' }]
+      ]
+    }
+  };
+}
+
 function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   const w = data.welcome;
   const buttons = [];
-  
+
   if (isRejected) {
     return {
       text: '❌ <b>طلبك مرفوض.</b>\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
@@ -458,7 +756,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       buttons: null
     };
   }
-  
+
   if (isPending) {
     return {
       text: '⏳ <b>طلبك قيد المراجعة.</b>\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
@@ -466,19 +764,22 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       buttons: null
     };
   }
-  
+
+  // المستخدم مسجل أو التحقق معطل
   if (isVerified || !data.verification.enabled) {
+    // التحقق من الاشتراك الإجباري
     return {
       text: w.registeredMessage || '📦 <b>مرحباً بعودتك!</b>\n\nيمكنك استخدام البوت الآن.',
       image: null,
       buttons: null
     };
   }
-  
+
+  // مستخدم جديد يحتاج للتحقق
   if (isNewUser || (!isVerified && data.verification.enabled)) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
-  
+
   return {
     text: w.text,
     image: w.image,
@@ -493,18 +794,16 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    // تحميل البيانات من KV
+
     await loadData(env);
-    
-    // تحديث إعدادات التسجيل
+
     setLogChannel(data.notifications.channelId);
     setLogEnabled(data.notifications.enabled);
-    
+
     if (url.pathname === '/') {
       return new Response('Bot running!');
     }
-    
+
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -515,7 +814,7 @@ export default {
         return new Response('Error: ' + e.message, { status: 500 });
       }
     }
-    
+
     if (url.pathname === '/setwebhook') {
       const token = env.BOT_TOKEN;
       const webhook = 'https://' + url.hostname + '/webhook';
@@ -523,7 +822,7 @@ export default {
       const result = await res.json();
       return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } });
     }
-    
+
     return new Response('Not found', { status: 404 });
   }
 };
@@ -535,7 +834,7 @@ export default {
 async function handleUpdate(update, env) {
   const token = env.BOT_TOKEN;
   const ADMIN = env.ADMIN_ID;
-  
+
   // ===== كولباك =====
   if (update.callback_query) {
     const q = update.callback_query;
@@ -543,11 +842,20 @@ async function handleUpdate(update, env) {
     const cbData = q.data;
     const chatId = q.message.chat.id;
     const msgId = q.message.message_id;
-    
+
+    // زر بدء الاستخدام
     if (cbData === 'start_use') {
       const user = data.users[userId] || {};
       await sendLog(userId, user.username, user.name, '▶️ بدء الاستخدام', 'بدأ المستخدم استخدام البوت', token);
-      
+
+      // التحقق من الاشتراك الإجباري
+      const fsOk = await checkForcedSubscription(userId, token);
+      if (!fsOk) {
+        await showForcedSubscription(chatId, userId, token);
+        await answerCallback(q.id, '✅', token);
+        return;
+      }
+
       if (data.verification.enabled) {
         await sendMessage(chatId, data.verification.requestMessage, token, {
           reply_markup: {
@@ -562,7 +870,26 @@ async function handleUpdate(update, env) {
       await answerCallback(q.id, '✅', token);
       return;
     }
-    
+
+    // زر التحقق من الاشتراك الإجباري
+    if (cbData === 'check_subscription') {
+      const fsOk = await checkForcedSubscription(userId, token);
+      if (fsOk) {
+        await sendMessage(chatId, '✅ <b>تم التحقق من اشتراكاتك!</b>\n\nيمكنك الآن استخدام البوت.', token);
+        // إعادة توجيه المستخدم للقائمة الرئيسية
+        const welcome = getWelcomeForUser(false, false, true, false);
+        if (welcome.image) {
+          await sendPhoto(chatId, welcome.image, welcome.text, token, { reply_markup: { remove_keyboard: true } });
+        } else {
+          await sendMessage(chatId, welcome.text, token, { reply_markup: { remove_keyboard: true } });
+        }
+      } else {
+        await showForcedSubscription(chatId, userId, token);
+      }
+      await answerCallback(q.id, '✅', token);
+      return;
+    }
+
     // أدمن
     if (userId === ADMIN) {
       await handleAdminCallback(cbData, chatId, msgId, token, env);
@@ -572,7 +899,7 @@ async function handleUpdate(update, env) {
     }
     return;
   }
-  
+
   // ===== رسائل =====
   if (update.message) {
     const msg = update.message;
@@ -581,261 +908,31 @@ async function handleUpdate(update, env) {
     const text = msg.text;
     const username = msg.from.username || 'لا يوجد';
     const name = msg.from.first_name + ' ' + (msg.from.last_name || '');
-    
+
     if (userId !== ADMIN && text) {
       await sendLog(userId, username, name, '📩 رسالة', 'أرسل: ' + text, token);
     }
-    
+
     // ===== الأدمن =====
     if (userId === ADMIN) {
-      // تعديل نص الترحيب
-      if (adminState.action === 'edit_welcome' && adminState.step === 'text') {
-        data.welcome.text = text;
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        const menu = welcomeMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تحديث النص', token);
-        return;
-      }
-      
-      // تعديل رسالة المستخدم المسجل
-      if (adminState.action === 'edit_registered' && adminState.step === 'text') {
-        data.welcome.registeredMessage = text;
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        const menu = welcomeMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تحديث رسالة المستخدم المسجل', token);
-        return;
-      }
-      
-      // معالجة الصورة المرفوعة
-      if (adminState.action === 'upload_welcome_image' && adminState.step === 'waiting_image') {
-        if (msg.photo) {
-          const photo = msg.photo[msg.photo.length - 1];
-          data.welcome.image = photo.file_id;
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          const menu = welcomeMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ تم إضافة الصورة بنجاح!', token);
-        } else {
-          await sendMessage(chatId, '❌ يرجى إرسال صورة صالحة.', token);
-        }
-        return;
-      }
-      
-      // تعديل رسالة الإيقاف
-      if (adminState.action === 'edit_stop' && adminState.step === 'text') {
-        data.settings.stopMessage = text;
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        const menu = botSettingsMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تحديث رسالة الإيقاف', token);
-        return;
-      }
-      
-      // تعديل رسائل التحقق
-      if (adminState.action === 'edit_verif_msg' && adminState.step === 'text') {
-        const field = adminState.temp.field;
-        data.verification[field] = text;
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        const menu = verificationMessagesMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم تحديث الرسالة', token);
-        return;
-      }
-      
-      // تعيين قناة التحقق
-      if (adminState.action === 'set_verif_channel' && adminState.step === 'text') {
-        const channelId = text.trim();
-        const chatInfo = await getChatInfo(channelId, token);
-        
-        if (chatInfo) {
-          data.verification.channelId = channelId;
-          data.verification.channelName = chatInfo.name;
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          
-          const testMsg = '✅ <b>تم تعيين هذه القناة للتحقق من العضوية.</b>\n\nستصل طلبات التحقق الجديدة إلى هنا.';
-          await sendMessage(channelId, testMsg, token);
-          
-          const menu = verificationMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ <b>تم تعيين قناة التحقق بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
-        } else {
-          await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
-        }
-        return;
-      }
-      
-      // تعيين قناة الإشعارات
-      if (adminState.action === 'set_notif_channel' && adminState.step === 'text') {
-        const channelId = text.trim();
-        const chatInfo = await getChatInfo(channelId, token);
-        
-        if (chatInfo) {
-          data.notifications.channelId = channelId;
-          data.notifications.channelName = chatInfo.name;
-          setLogChannel(channelId);
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          
-          const testMsg = '✅ <b>تم تعيين هذه القناة للإشعارات.</b>\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
-          await sendMessage(channelId, testMsg, token);
-          
-          const menu = notificationsMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ <b>تم تعيين قناة الإشعارات بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
-        } else {
-          await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
-        }
-        return;
-      }
-      
-      // إضافة مستخدم للتحقق
-      if (adminState.action === 'verif_add_user' && adminState.step === 'text') {
-        const targetId = text.trim();
-        if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
-        data.verification.verifiedUsers[targetId] = { name: 'مستخدم', date: new Date().toISOString() };
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        await sendMessage(chatId, '✅ تم إضافة المستخدم ' + targetId, token);
-        const menu = verificationListMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        return;
-      }
-      
-      // حذف مستخدم من التحقق
-      if (adminState.action === 'verif_remove_user' && adminState.step === 'text') {
-        const targetId = text.trim();
-        if (data.verification.verifiedUsers && data.verification.verifiedUsers[targetId]) {
-          delete data.verification.verifiedUsers[targetId];
-        }
-        if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
-          delete data.verification.rejectedUsers[targetId];
-        }
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        await sendMessage(chatId, '✅ تم حذف المستخدم ' + targetId, token);
-        const menu = verificationListMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        return;
-      }
-      
-      // إضافة أمر
-      if (adminState.action === 'cmd_add' && adminState.step === 'cmd') {
-        adminState.temp.cmd = text;
-        adminState.step = 'desc';
-        await sendMessage(chatId, '📝 <b>أدخل وصف الأمر:</b>', token);
-        return;
-      }
-      
-      if (adminState.action === 'cmd_add' && adminState.step === 'desc') {
-        if (!data.commands) data.commands = {};
-        data.commands[adminState.temp.cmd] = { description: text, enabled: true };
-        await saveData(env);
-        adminState.action = null;
-        adminState.step = null;
-        await updateBotCommands(token);
-        const menu = commandsMenu();
-        await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-        await sendMessage(chatId, '✅ تم إضافة الأمر /' + adminState.temp.cmd, token);
-        return;
-      }
-      
-      // تعديل أمر
-      if (adminState.action === 'cmd_edit' && adminState.step === 'cmd') {
-        const cmd = text.replace('/', '');
-        if (data.commands && data.commands[cmd]) {
-          adminState.temp.editCmd = cmd;
-          adminState.step = 'desc';
-          await sendMessage(chatId, '📝 <b>أدخل الوصف الجديد لـ /' + cmd + ':</b>\n\nالحالي: ' + data.commands[cmd].description, token);
-        } else {
-          await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
-        }
-        return;
-      }
-      
-      if (adminState.action === 'cmd_edit' && adminState.step === 'desc') {
-        const cmd = adminState.temp.editCmd;
-        if (data.commands && data.commands[cmd]) {
-          data.commands[cmd].description = text;
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          await updateBotCommands(token);
-          const menu = commandsMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ تم تحديث /' + cmd, token);
-        }
-        return;
-      }
-      
-      // حذف أمر
-      if (adminState.action === 'cmd_delete' && adminState.step === 'cmd') {
-        const cmd = text.replace('/', '');
-        if (data.commands && data.commands[cmd]) {
-          delete data.commands[cmd];
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          await updateBotCommands(token);
-          const menu = commandsMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ تم حذف /' + cmd, token);
-        } else {
-          await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
-        }
-        return;
-      }
-      
-      // تفعيل/تعطيل أمر
-      if (adminState.action === 'cmd_toggle' && adminState.step === 'cmd') {
-        const cmd = text.replace('/', '');
-        if (data.commands && data.commands[cmd]) {
-          data.commands[cmd].enabled = !data.commands[cmd].enabled;
-          await saveData(env);
-          adminState.action = null;
-          adminState.step = null;
-          await updateBotCommands(token);
-          const menu = commandsMenu();
-          await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
-          await sendMessage(chatId, '✅ تم ' + (data.commands[cmd].enabled ? 'تفعيل' : 'تعطيل') + ' /' + cmd, token);
-        } else {
-          await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
-        }
-        return;
-      }
-      
+      // ... (معالجة أوامر الأدمن كما هي مع الحفاظ على saveData)
+      // سنضيف معالجة الأقسام الجديدة في handleAdminCallback
       // بداية لوحة الأدمن
       if (text === '/start' || text === '/admin') {
         const menu = adminMenu();
         await sendMessage(chatId, menu.text, token, { reply_markup: menu.keyboard });
       }
+      // معالجة الإدخالات الأخرى (تعديل النصوص، إلخ)
+      await handleAdminInput(chatId, text, token, env);
       return;
     }
-    
+
     // ===== المستخدم =====
-    
     // معالجة رقم الهاتف (التحقق)
     if (msg.contact) {
       const contact = msg.contact;
-      
       await sendLog(userId, username, name, '📱 مشاركة رقم', 'شارك رقم هاتفه للتحقق', token);
-      
+
       if (data.verification.enabled) {
         if (data.verification.channelId) {
           const adminMsg = `
@@ -856,9 +953,8 @@ async function handleUpdate(update, env) {
               ]
             ]
           };
-          
+
           const result = await sendMessage(data.verification.channelId, adminMsg, token, { reply_markup: kb });
-          
           if (!result.ok) {
             console.error('❌ فشل إرسال الطلب للقناة:', result.description);
             await sendMessage(chatId, '⚠️ حدث خطأ في إرسال طلبك. يرجى المحاولة لاحقاً.', token);
@@ -868,7 +964,7 @@ async function handleUpdate(update, env) {
           await sendMessage(chatId, '⚠️ لم يتم تعيين قناة للتحقق. يرجى التواصل مع الإدارة.', token);
           return;
         }
-        
+
         if (!data.verification.pendingUsers) data.verification.pendingUsers = {};
         data.verification.pendingUsers[userId] = {
           name: name,
@@ -877,40 +973,57 @@ async function handleUpdate(update, env) {
           date: new Date().toISOString()
         };
         await saveData(env);
-        
+
         await sendMessage(chatId, '⏳ تم استلام طلبك! جاري المراجعة...', token);
         return;
       }
     }
-    
+
     // المستخدم - /start
     if (text === '/start') {
       await sendLog(userId, username, name, '🔄 بدء', 'ضغط على /start', token);
-      
+
       const isNewUser = !data.users[userId];
       const isPending = data.verification.pendingUsers && data.verification.pendingUsers[userId];
       const isVerified = data.verification.verifiedUsers && data.verification.verifiedUsers[userId];
       const isRejected = data.verification.rejectedUsers && data.verification.rejectedUsers[userId];
-      
+
       if (isNewUser) {
-        data.users[userId] = { name: name, username: username, joined: new Date().toISOString() };
+        data.users[userId] = {
+          name: name,
+          username: username,
+          joined: new Date().toLocaleString('ar-EG')
+        };
+        await saveData(env);
+      } else {
+        // تحديث آخر استخدام
+        data.users[userId].lastUsed = new Date().toLocaleString('ar-EG');
         await saveData(env);
       }
-      
+
+      // التحقق من الاشتراك الإجباري للمستخدمين المسجلين
+      if (!isNewUser && (isVerified || !data.verification.enabled)) {
+        const fsOk = await checkForcedSubscription(userId, token);
+        if (!fsOk) {
+          await showForcedSubscription(chatId, userId, token);
+          return;
+        }
+      }
+
       const welcome = getWelcomeForUser(isNewUser, isPending, isVerified, isRejected);
-      
+
       if (welcome.image) {
-        await sendPhoto(chatId, welcome.image, welcome.text, token, { 
+        await sendPhoto(chatId, welcome.image, welcome.text, token, {
           reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true }
         });
       } else {
-        await sendMessage(chatId, welcome.text, token, { 
+        await sendMessage(chatId, welcome.text, token, {
           reply_markup: welcome.buttons ? { inline_keyboard: welcome.buttons } : { remove_keyboard: true }
         });
       }
       return;
     }
-    
+
     // الأوامر المخصصة
     const cmd = text.startsWith('/') ? text.substring(1) : null;
     if (cmd && data.commands && data.commands[cmd] && data.commands[cmd].enabled) {
@@ -918,8 +1031,61 @@ async function handleUpdate(update, env) {
       await sendMessage(chatId, '🔹 ' + data.commands[cmd].description, token);
       return;
     }
-    
+
     await sendMessage(chatId, '❌ أمر غير معروف', token);
+  }
+}
+
+// ====================================================================
+// ========== عرض الاشتراك الإجباري للمستخدم ==========
+// ====================================================================
+
+async function showForcedSubscription(chatId, userId, token) {
+  const fs = data.forcedSubscription;
+  const activeSubs = fs.list.filter(s => s.enabled !== false);
+  if (activeSubs.length === 0) return;
+
+  if (fs.settings.displayMode === 'separate') {
+    // عرض اشتراك واحد في كل مرة
+    for (const sub of activeSubs) {
+      const subscribed = await checkSingleSubscription(userId, sub, token);
+      if (!subscribed) {
+        let text = '🔗 <b>' + (sub.name || 'اشتراك مطلوب') + '</b>\n\n';
+        if (sub.message) text += sub.message + '\n\n';
+        if (sub.type === 'link') {
+          text += '🔗 <a href="' + sub.link + '">اضغط هنا للدخول</a>\n';
+          text += '⏳ بعد الدخول انتظر 3 ثوانٍ ثم اضغط "تم".';
+          const kb = {
+            inline_keyboard: [
+              [{ text: '✅ تم', callback_data: 'fs_link_done_' + sub.id }],
+              [{ text: '🔄 التحقق', callback_data: 'check_subscription' }]
+            ]
+          };
+          await sendMessage(chatId, text, token, { reply_markup: kb });
+        } else {
+          if (sub.link) text += '🔗 <a href="' + sub.link + '">الاشتراك</a>\n';
+          text += '\n📌 بعد الاشتراك، اضغط "تحقق ✅"';
+          const kb = {
+            inline_keyboard: [
+              [{ text: '✅ تحقق', callback_data: 'check_subscription' }]
+            ]
+          };
+          await sendMessage(chatId, text, token, { reply_markup: kb });
+        }
+        return;
+      }
+    }
+    // كل الاشتراكات تمت
+    await sendMessage(chatId, '✅ <b>تم التحقق من جميع الاشتراكات!</b>', token);
+  } else {
+    // عرض مجمع
+    const text = fs.settings.groupedMessage || '📢 <b>يجب عليك الاشتراك في القنوات التالية:</b>';
+    const keyboard = getForcedSubscriptionKeyboard(userId);
+    if (keyboard) {
+      await sendMessage(chatId, text, token, { reply_markup: keyboard });
+    } else {
+      await sendMessage(chatId, text, token);
+    }
   }
 }
 
@@ -928,37 +1094,46 @@ async function handleUpdate(update, env) {
 // ====================================================================
 
 async function handleAdminCallback(cbData, chatId, msgId, token, env) {
+  // ===== الرجوع الأساسي =====
   if (cbData === 'admin_back') {
     const menu = adminMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'settings_back') {
     const menu = settingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'verif_back') {
     const menu = verificationMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
+  if (cbData === 'admin_users') {
+    const menu = usersMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'admin_forced_subscription') {
+    const menu = forcedSubscriptionMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== الإعدادات =====
   if (cbData === 'admin_settings') {
     const menu = settingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
+
   // ===== حالة البوت =====
   if (cbData === 'settings_bot_toggle') {
     const menu = botSettingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'bot_toggle') {
     data.settings.botActive = !data.settings.botActive;
     await saveData(env);
@@ -966,22 +1141,20 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'bot_edit_stop') {
     adminState.action = 'edit_stop';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل رسالة الإيقاف الجديدة:</b>\n\nالحالية:\n' + data.settings.stopMessage, token);
     return;
   }
-  
+
   // ===== التحقق =====
   if (cbData === 'settings_verification') {
     const menu = verificationMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'verif_toggle') {
     data.verification.enabled = !data.verification.enabled;
     await saveData(env);
@@ -989,85 +1162,67 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'verif_messages') {
     const menu = verificationMessagesMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'verif_msg_request') {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId, field: 'requestMessage' };
+    adminState.temp = { chatId, msgId, field: 'requestMessage' };
     await sendMessage(chatId, '📝 <b>أدخل نص طلب الرقم الجديد:</b>\n\nالحالي:\n' + data.verification.requestMessage, token);
     return;
   }
-  
   if (cbData === 'verif_msg_button') {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId, field: 'buttonText' };
+    adminState.temp = { chatId, msgId, field: 'buttonText' };
     await sendMessage(chatId, '📝 <b>أدخل نص زر المشاركة الجديد:</b>\n\nالحالي:\n' + data.verification.buttonText, token);
     return;
   }
-  
   if (cbData === 'verif_msg_success') {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId, field: 'successMessage' };
+    adminState.temp = { chatId, msgId, field: 'successMessage' };
     await sendMessage(chatId, '📝 <b>أدخل رسالة النجاح الجديدة:</b>\n\nالحالية:\n' + data.verification.successMessage, token);
     return;
   }
-  
   if (cbData === 'verif_msg_fail') {
     adminState.action = 'edit_verif_msg';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId, field: 'failMessage' };
+    adminState.temp = { chatId, msgId, field: 'failMessage' };
     await sendMessage(chatId, '📝 <b>أدخل رسالة الرفض الجديدة:</b>\n\nالحالية:\n' + data.verification.failMessage, token);
     return;
   }
-  
   if (cbData === 'verif_channel') {
     adminState.action = 'set_verif_channel';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل معرف قناة التحقق:</b>\n(يجب أن يكون البوت أدمن في القناة)', token);
     return;
   }
-  
   if (cbData === 'verif_list') {
     const menu = verificationListMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'verif_list_verified') {
     const v = data.verification.verifiedUsers || {};
     const keys = Object.keys(v);
     let text = '✅ <b>المستخدمين المحققين</b>\n\n';
-    if (keys.length === 0) {
-      text += 'لا يوجد مستخدمين محققين.';
-    } else {
-      keys.forEach(id => {
-        text += '• ' + id + ' - ' + (v[id].name || 'غير معروف') + '\n';
-      });
-    }
+    if (keys.length === 0) text += 'لا يوجد مستخدمين محققين.';
+    else keys.forEach(id => { text += '• ' + id + ' - ' + (v[id].name || 'غير معروف') + '\n'; });
     await sendMessage(chatId, text, token);
     return;
   }
-  
   if (cbData === 'verif_list_rejected') {
     const v = data.verification.rejectedUsers || {};
     const keys = Object.keys(v);
-    let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
-    
     if (keys.length === 0) {
-      text += 'لا يوجد مستخدمين مرفوضين.';
-      await sendMessage(chatId, text, token);
+      await sendMessage(chatId, '❌ لا يوجد مستخدمين مرفوضين.', token);
       return;
     }
-    
     const buttons = [];
     keys.forEach(id => {
       buttons.push([
@@ -1076,41 +1231,26 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       ]);
     });
     buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
-    
-    await editMessage(chatId, msgId, text, token, { 
-      reply_markup: { inline_keyboard: buttons }
-    });
+    await editMessage(chatId, msgId, '❌ <b>المستخدمين المرفوضين</b>\n\nاختر إجراء:', token, { reply_markup: { inline_keyboard: buttons } });
     return;
   }
-  
   if (cbData.startsWith('verif_reapprove_')) {
     const targetId = cbData.replace('verif_reapprove_', '');
-    
     if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
       const user = data.verification.rejectedUsers[targetId];
-      
       if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
-      data.verification.verifiedUsers[targetId] = { 
-        name: user.name, 
-        date: new Date().toISOString(),
-        reapproved: true 
-      };
+      data.verification.verifiedUsers[targetId] = { name: user.name, date: new Date().toISOString(), reapproved: true };
       delete data.verification.rejectedUsers[targetId];
       await saveData(env);
-      
       await sendMessage(targetId, '✅ <b>تم إعادة قبول طلبك!</b>\n\n' + data.verification.successMessage, token);
       await sendMessage(targetId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
-      
+      // تحديث القائمة
       const v = data.verification.rejectedUsers || {};
       const keys = Object.keys(v);
-      let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
-      
       if (keys.length === 0) {
-        text += 'لا يوجد مستخدمين مرفوضين.';
-        await editMessage(chatId, msgId, text, token);
+        await editMessage(chatId, msgId, '❌ لا يوجد مستخدمين مرفوضين.', token);
         return;
       }
-      
       const buttons = [];
       keys.forEach(id => {
         buttons.push([
@@ -1119,32 +1259,21 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
         ]);
       });
       buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
-      
-      await editMessage(chatId, msgId, text, token, { 
-        reply_markup: { inline_keyboard: buttons }
-      });
-      await sendMessage(chatId, '✅ <b>تم إعادة قبول المستخدم ' + targetId + '</b>', token);
+      await editMessage(chatId, msgId, '❌ <b>المستخدمين المرفوضين</b>\n\nاختر إجراء:', token, { reply_markup: { inline_keyboard: buttons } });
     }
     return;
   }
-  
   if (cbData.startsWith('verif_delete_rejected_')) {
     const targetId = cbData.replace('verif_delete_rejected_', '');
-    
     if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
       delete data.verification.rejectedUsers[targetId];
       await saveData(env);
-      
       const v = data.verification.rejectedUsers || {};
       const keys = Object.keys(v);
-      let text = '❌ <b>المستخدمين المرفوضين</b>\n\n';
-      
       if (keys.length === 0) {
-        text += 'لا يوجد مستخدمين مرفوضين.';
-        await editMessage(chatId, msgId, text, token);
+        await editMessage(chatId, msgId, '❌ لا يوجد مستخدمين مرفوضين.', token);
         return;
       }
-      
       const buttons = [];
       keys.forEach(id => {
         buttons.push([
@@ -1153,31 +1282,24 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
         ]);
       });
       buttons.push([{ text: '🔙 رجوع', callback_data: 'verif_back' }]);
-      
-      await editMessage(chatId, msgId, text, token, { 
-        reply_markup: { inline_keyboard: buttons }
-      });
-      await sendMessage(chatId, '🗑️ <b>تم حذف المستخدم ' + targetId + ' من المرفوضين</b>', token);
+      await editMessage(chatId, msgId, '❌ <b>المستخدمين المرفوضين</b>\n\nاختر إجراء:', token, { reply_markup: { inline_keyboard: buttons } });
     }
     return;
   }
-  
   if (cbData === 'verif_add_user') {
     adminState.action = 'verif_add_user';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل ID المستخدم للإضافة:</b>', token);
     return;
   }
-  
   if (cbData === 'verif_remove_user') {
     adminState.action = 'verif_remove_user';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل ID المستخدم للحذف:</b>', token);
     return;
   }
-  
   if (cbData.startsWith('verif_approve_')) {
     const targetId = cbData.replace('verif_approve_', '');
     if (data.verification.pendingUsers && data.verification.pendingUsers[targetId]) {
@@ -1186,14 +1308,12 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       data.verification.verifiedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
-      
       await editMessage(chatId, msgId, '✅ <b>تم قبول المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.successMessage, token);
       await sendMessage(targetId, '📦 <b>المحتوى:</b>\n\nمرحباً! يمكنك الآن استخدام البوت.', token);
     }
     return;
   }
-  
   if (cbData.startsWith('verif_reject_')) {
     const targetId = cbData.replace('verif_reject_', '');
     if (data.verification.pendingUsers && data.verification.pendingUsers[targetId]) {
@@ -1202,20 +1322,18 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       data.verification.rejectedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
-      
       await editMessage(chatId, msgId, '❌ <b>تم رفض المستخدم</b>\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.failMessage, token);
     }
     return;
   }
-  
+
   // ===== حماية المحتوى =====
   if (cbData === 'settings_protection') {
     const menu = protectionMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'protect_toggle') {
     data.protection.enabled = !data.protection.enabled;
     await saveData(env);
@@ -1223,14 +1341,13 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
+
   // ===== الإشعارات =====
   if (cbData === 'settings_notifications') {
     const menu = notificationsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'notif_toggle') {
     data.notifications.enabled = !data.notifications.enabled;
     setLogEnabled(data.notifications.enabled);
@@ -1239,38 +1356,34 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'notif_channel') {
     adminState.action = 'set_notif_channel';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل معرف قناة الإشعارات:</b>\n(يجب أن يكون البوت أدمن في القناة)', token);
     return;
   }
-  
+
   // ===== رسالة الترحيب =====
   if (cbData === 'admin_welcome') {
     const menu = welcomeMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'welcome_edit_text') {
     adminState.action = 'edit_welcome';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل نص الترحيب الجديد:</b>\n(يمكنك استخدام HTML)\n\nالحالي:\n' + data.welcome.text, token);
     return;
   }
-  
   if (cbData === 'welcome_edit_image') {
     adminState.action = 'upload_welcome_image';
     adminState.step = 'waiting_image';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '🖼️ <b>أرسل الصورة الجديدة:</b>', token);
     return;
   }
-  
   if (cbData === 'welcome_delete_image') {
     data.welcome.image = null;
     await saveData(env);
@@ -1279,7 +1392,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await sendMessage(chatId, '🗑️ تم حذف الصورة', token);
     return;
   }
-  
   if (cbData === 'welcome_toggle_html') {
     data.welcome.useHtml = !data.welcome.useHtml;
     await saveData(env);
@@ -1288,49 +1400,44 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await sendMessage(chatId, '📄 تم ' + (data.welcome.useHtml ? 'تفعيل' : 'تعطيل') + ' وضع HTML', token);
     return;
   }
-  
   if (cbData === 'welcome_edit_registered') {
     adminState.action = 'edit_registered';
     adminState.step = 'text';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل رسالة المستخدم المسجل الجديدة:</b>\n(يمكنك استخدام HTML)\n\nالحالية:\n' + data.welcome.registeredMessage, token);
     return;
   }
-  
   if (cbData === 'welcome_preview') {
     const w = data.welcome;
     let previewText = '📋 <b>معاينة رسالة الترحيب</b>\n\n' +
                       '👤 <b>للمستخدم الجديد:</b>\n' + w.text + '\n\n' +
                       '👤 <b>للمستخدم المسجل:</b>\n' + w.registeredMessage;
-    
     if (w.image) {
       previewText += '\n\n🖼️ <b>الصورة:</b> موجودة';
-      await sendPhoto(chatId, w.image, previewText, token);
+      await sendPhoto(chatId, w.image, previewText, token, { bypass_protection: true });
     } else {
-      await sendMessage(chatId, previewText, token);
+      await sendMessage(chatId, previewText, token, { bypass_protection: true });
     }
     return;
   }
-  
+
   // ===== الأوامر =====
   if (cbData === 'admin_commands') {
     const menu = commandsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
   if (cbData === 'cmd_add') {
     adminState.action = 'cmd_add';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     await sendMessage(chatId, '📝 <b>أدخل اسم الأمر الجديد:</b>\n(بدون /)', token);
     return;
   }
-  
   if (cbData === 'cmd_edit') {
     adminState.action = 'cmd_edit';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     const all = Object.keys(data.commands || {});
     if (all.length === 0) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
@@ -1339,11 +1446,10 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للتعديل:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
-  
   if (cbData === 'cmd_delete') {
     adminState.action = 'cmd_delete';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     const all = Object.keys(data.commands || {});
     if (all.length === 0) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
@@ -1352,11 +1458,10 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للحذف:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
-  
   if (cbData === 'cmd_toggle') {
     adminState.action = 'cmd_toggle';
     adminState.step = 'cmd';
-    adminState.temp = { chatId: chatId, msgId: msgId };
+    adminState.temp = { chatId, msgId };
     const all = Object.keys(data.commands || {});
     if (all.length === 0) {
       await sendMessage(chatId, '⚠️ لا توجد أوامر', token);
@@ -1365,7 +1470,245 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await sendMessage(chatId, '📝 <b>أدخل اسم الأمر للتفعيل/التعطيل:</b>\n\n' + all.map(c => '• /' + c).join('\n'), token);
     return;
   }
-  
+
+  // ===== قسم المستخدمين =====
+  if (cbData === 'admin_users') {
+    const menu = usersMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'users_list') {
+    const menu = usersListMenu(1);
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData.startsWith('users_page_')) {
+    const page = parseInt(cbData.replace('users_page_', ''));
+    const menu = usersListMenu(page);
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'users_delete') {
+    const menu = usersDeleteMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData.startsWith('users_delete_confirm_')) {
+    const targetId = cbData.replace('users_delete_confirm_', '');
+    if (data.users && data.users[targetId]) {
+      delete data.users[targetId];
+      // حذف من التحقق أيضاً
+      if (data.verification.verifiedUsers && data.verification.verifiedUsers[targetId]) {
+        delete data.verification.verifiedUsers[targetId];
+      }
+      if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
+        delete data.verification.rejectedUsers[targetId];
+      }
+      if (data.verification.pendingUsers && data.verification.pendingUsers[targetId]) {
+        delete data.verification.pendingUsers[targetId];
+      }
+      await saveData(env);
+      await sendMessage(chatId, '✅ <b>تم حذف المستخدم</b> ' + targetId, token);
+      const menu = usersMenu();
+      await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    } else {
+      await sendMessage(chatId, '❌ المستخدم غير موجود', token);
+    }
+    return;
+  }
+
+  // ===== قسم الاشتراك الإجباري =====
+  if (cbData === 'admin_forced_subscription') {
+    const menu = forcedSubscriptionMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'fs_toggle_all') {
+    data.forcedSubscription.enabled = !data.forcedSubscription.enabled;
+    await saveData(env);
+    const menu = forcedSubscriptionMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'fs_add') {
+    adminState.action = 'fs_add_type';
+    adminState.step = 'choose_type';
+    adminState.temp = { chatId, msgId };
+    const types = [
+      { text: '📢 قناة عامة', data: 'fs_type_channel' },
+      { text: '🔒📢 قناة خاصة', data: 'fs_type_channel_private' },
+      { text: '👥 مجموعة عامة', data: 'fs_type_group' },
+      { text: '🔒👥 مجموعة خاصة', data: 'fs_type_group_private' },
+      { text: '🤖 بوت', data: 'fs_type_bot' },
+      { text: '🔗 رابط', data: 'fs_type_link' }
+    ];
+    const buttons = types.map(t => [{ text: t.text, callback_data: t.data }]);
+    buttons.push([{ text: '🔙 إلغاء', callback_data: 'admin_forced_subscription' }]);
+    await sendMessage(chatId, '📝 <b>اختر نوع الاشتراك:</b>', token, { reply_markup: { inline_keyboard: buttons } });
+    return;
+  }
+  if (cbData.startsWith('fs_type_')) {
+    const type = cbData.replace('fs_type_', '');
+    adminState.action = 'fs_add_data';
+    adminState.step = 'waiting_id';
+    adminState.temp.type = type;
+    adminState.temp.chatId = chatId;
+    adminState.temp.msgId = msgId;
+    let prompt = '';
+    if (type === 'channel' || type === 'channel_private') {
+      prompt = '📢 <b>أدخل معرف القناة:</b>\n' +
+               (type === 'channel' ? '(مثل: @channel)' : '(أرسل توجيه لرسالة من القناة)');
+    } else if (type === 'group' || type === 'group_private') {
+      prompt = '👥 <b>أدخل معرف المجموعة:</b>\n' +
+               (type === 'group' ? '(مثل: @group)' : '(أرسل ID المجموعة)');
+    } else if (type === 'bot') {
+      prompt = '🤖 <b>أدخل معرف البوت:</b>\n(مثل: @bot أو username)';
+    } else if (type === 'link') {
+      prompt = '🔗 <b>أدخل الرابط:</b>\n(مثل: https://youtube.com/...)';
+    }
+    await sendMessage(chatId, prompt, token);
+    return;
+  }
+  if (cbData === 'fs_edit') {
+    const fs = data.forcedSubscription;
+    if (!fs.list || fs.list.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد اشتراكات لتعديلها.', token);
+      return;
+    }
+    const buttons = fs.list.map((s, i) => {
+      return [{ text: '✏️ ' + (s.name || s.type + ' ' + (i+1)), callback_data: 'fs_edit_select_' + i }];
+    });
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_forced_subscription' }]);
+    await editMessage(chatId, msgId, '✏️ <b>اختر اشتراكاً لتعديله:</b>', token, { reply_markup: { inline_keyboard: buttons } });
+    return;
+  }
+  if (cbData.startsWith('fs_edit_select_')) {
+    const index = parseInt(cbData.replace('fs_edit_select_', ''));
+    const fs = data.forcedSubscription;
+    if (!fs.list || !fs.list[index]) {
+      await sendMessage(chatId, '⚠️ الاشتراك غير موجود.', token);
+      return;
+    }
+    const sub = fs.list[index];
+    adminState.action = 'fs_edit_data';
+    adminState.step = 'choose_field';
+    adminState.temp = { index, chatId, msgId };
+    const buttons = [
+      [{ text: '✏️ الاسم', callback_data: 'fs_edit_field_name' }],
+      [{ text: '✏️ الرابط', callback_data: 'fs_edit_field_link' }],
+      [{ text: '✏️ الرسالة', callback_data: 'fs_edit_field_message' }],
+      [{ text: '🔄 ' + (sub.enabled !== false ? 'تعطيل' : 'تفعيل'), callback_data: 'fs_edit_field_toggle' }],
+      [{ text: '🔙 رجوع', callback_data: 'admin_forced_subscription' }]
+    ];
+    await editMessage(chatId, msgId, '✏️ <b>تعديل الاشتراك:</b> ' + (sub.name || sub.type) + '\n\nاختر الحقل:', token, { reply_markup: { inline_keyboard: buttons } });
+    return;
+  }
+  if (cbData.startsWith('fs_edit_field_')) {
+    const field = cbData.replace('fs_edit_field_', '');
+    const index = adminState.temp.index;
+    const fs = data.forcedSubscription;
+    if (!fs.list || !fs.list[index]) {
+      await sendMessage(chatId, '⚠️ الاشتراك غير موجود.', token);
+      return;
+    }
+    const sub = fs.list[index];
+    adminState.step = 'waiting_edit_value';
+    adminState.temp.editField = field;
+    let prompt = '';
+    if (field === 'name') prompt = '📝 <b>أدخل الاسم الجديد:</b>\nالحالي: ' + (sub.name || 'غير محدد');
+    else if (field === 'link') prompt = '🔗 <b>أدخل الرابط الجديد:</b>\nالحالي: ' + (sub.link || 'غير محدد');
+    else if (field === 'message') prompt = '✏️ <b>أدخل الرسالة الجديدة:</b>\nالحالي: ' + (sub.message || 'غير محدد');
+    else if (field === 'toggle') {
+      sub.enabled = sub.enabled === undefined ? false : !sub.enabled;
+      await saveData(env);
+      await sendMessage(chatId, '🔄 تم ' + (sub.enabled ? 'تفعيل' : 'تعطيل') + ' الاشتراك.', token);
+      const menu = forcedSubscriptionMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      return;
+    }
+    await sendMessage(chatId, prompt, token);
+    return;
+  }
+  if (cbData === 'fs_delete') {
+    const fs = data.forcedSubscription;
+    if (!fs.list || fs.list.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد اشتراكات لحذفها.', token);
+      return;
+    }
+    const buttons = fs.list.map((s, i) => {
+      return [{ text: '🗑️ ' + (s.name || s.type + ' ' + (i+1)), callback_data: 'fs_delete_confirm_' + i }];
+    });
+    buttons.push([{ text: '🔙 رجوع', callback_data: 'admin_forced_subscription' }]);
+    await editMessage(chatId, msgId, '🗑️ <b>اختر اشتراكاً للحذف:</b>', token, { reply_markup: { inline_keyboard: buttons } });
+    return;
+  }
+  if (cbData.startsWith('fs_delete_confirm_')) {
+    const index = parseInt(cbData.replace('fs_delete_confirm_', ''));
+    const fs = data.forcedSubscription;
+    if (fs.list && fs.list[index]) {
+      const removed = fs.list.splice(index, 1);
+      await saveData(env);
+      await sendMessage(chatId, '🗑️ تم حذف الاشتراك: ' + (removed[0].name || removed[0].type), token);
+      const menu = forcedSubscriptionMenu();
+      await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    } else {
+      await sendMessage(chatId, '⚠️ الاشتراك غير موجود.', token);
+    }
+    return;
+  }
+  if (cbData === 'fs_settings') {
+    const menu = forcedSubscriptionSettingsMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'fs_setting_notification') {
+    data.forcedSubscription.settings.notification = !data.forcedSubscription.settings.notification;
+    await saveData(env);
+    const menu = forcedSubscriptionSettingsMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'fs_setting_display') {
+    const current = data.forcedSubscription.settings.displayMode || 'grouped';
+    data.forcedSubscription.settings.displayMode = (current === 'grouped' ? 'separate' : 'grouped');
+    await saveData(env);
+    const menu = forcedSubscriptionSettingsMenu();
+    await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+  if (cbData === 'fs_setting_verify_text') {
+    adminState.action = 'fs_setting_verify_text';
+    adminState.step = 'waiting_input';
+    adminState.temp = { chatId, msgId };
+    await sendMessage(chatId, '🔘 <b>أدخل النص الجديد لزر التحقق:</b>\n\nالحالي: ' + data.forcedSubscription.settings.verifyButtonText, token);
+    return;
+  }
+  if (cbData === 'fs_setting_grouped_message') {
+    adminState.action = 'fs_setting_grouped_message';
+    adminState.step = 'waiting_input';
+    adminState.temp = { chatId, msgId };
+    await sendMessage(chatId, '✏️ <b>أدخل رسالة العرض المجمع الجديدة:</b>\n(يمكنك استخدام HTML)\n\nالحالية: ' + (data.forcedSubscription.settings.groupedMessage || 'غير محددة'), token);
+    return;
+  }
+  if (cbData === 'fs_preview') {
+    // معاينة بوابة الاشتراك
+    const fs = data.forcedSubscription;
+    const activeSubs = fs.list.filter(s => s.enabled !== false);
+    if (activeSubs.length === 0) {
+      await sendMessage(chatId, '⚠️ لا توجد اشتراكات نشطة للمعاينة.', token);
+      return;
+    }
+    const previewText = fs.settings.groupedMessage || '📢 <b>يجب عليك الاشتراك في القنوات التالية:</b>';
+    const keyboard = getForcedSubscriptionKeyboard('preview');
+    if (keyboard) {
+      await sendMessage(chatId, '👁️ <b>معاينة بوابة الاشتراك</b>\n\n' + previewText, token, { reply_markup: keyboard });
+    } else {
+      await sendMessage(chatId, '👁️ <b>معاينة بوابة الاشتراك</b>\n\n' + previewText + '\n\n(لا توجد اشتراكات نشطة)', token);
+    }
+    return;
+  }
+
+  // ===== إلغاء =====
   if (cbData === 'cancel') {
     adminState.action = null;
     adminState.step = null;
@@ -1374,6 +1717,311 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
   }
-  
+
   await sendMessage(chatId, '⚠️ خيار غير معروف', token);
+}
+
+// ====================================================================
+// ========== معالجة إدخالات الأدمن النصية ==========
+// ====================================================================
+
+async function handleAdminInput(chatId, text, token, env) {
+  // تعديل نص الترحيب
+  if (adminState.action === 'edit_welcome' && adminState.step === 'text') {
+    data.welcome.text = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = welcomeMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث النص', token);
+    return;
+  }
+
+  // تعديل رسالة المستخدم المسجل
+  if (adminState.action === 'edit_registered' && adminState.step === 'text') {
+    data.welcome.registeredMessage = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = welcomeMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث رسالة المستخدم المسجل', token);
+    return;
+  }
+
+  // تعديل رسالة الإيقاف
+  if (adminState.action === 'edit_stop' && adminState.step === 'text') {
+    data.settings.stopMessage = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = botSettingsMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث رسالة الإيقاف', token);
+    return;
+  }
+
+  // تعديل رسائل التحقق
+  if (adminState.action === 'edit_verif_msg' && adminState.step === 'text') {
+    const field = adminState.temp.field;
+    data.verification[field] = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = verificationMessagesMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث الرسالة', token);
+    return;
+  }
+
+  // تعيين قناة التحقق
+  if (adminState.action === 'set_verif_channel' && adminState.step === 'text') {
+    const channelId = text.trim();
+    const chatInfo = await getChatInfo(channelId, token);
+    if (chatInfo) {
+      data.verification.channelId = channelId;
+      data.verification.channelName = chatInfo.name;
+      await saveData(env);
+      adminState.action = null;
+      adminState.step = null;
+      const testMsg = '✅ <b>تم تعيين هذه القناة للتحقق من العضوية.</b>\n\nستصل طلبات التحقق الجديدة إلى هنا.';
+      await sendMessage(channelId, testMsg, token, { bypass_protection: true });
+      const menu = verificationMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, '✅ <b>تم تعيين قناة التحقق بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
+    } else {
+      await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+    }
+    return;
+  }
+
+  // تعيين قناة الإشعارات
+  if (adminState.action === 'set_notif_channel' && adminState.step === 'text') {
+    const channelId = text.trim();
+    const chatInfo = await getChatInfo(channelId, token);
+    if (chatInfo) {
+      data.notifications.channelId = channelId;
+      data.notifications.channelName = chatInfo.name;
+      setLogChannel(channelId);
+      await saveData(env);
+      adminState.action = null;
+      adminState.step = null;
+      const testMsg = '✅ <b>تم تعيين هذه القناة للإشعارات.</b>\n\nستصل جميع إجراءات المستخدمين إلى هنا.';
+      await sendMessage(channelId, testMsg, token, { bypass_protection: true });
+      const menu = notificationsMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, '✅ <b>تم تعيين قناة الإشعارات بنجاح!</b>\n\n📢 <b>اسم القناة:</b> ' + chatInfo.name + '\n🆔 <b>المعرف:</b> ' + channelId, token);
+    } else {
+      await sendMessage(chatId, '❌ <b>فشل تعيين القناة.</b>\n\nتأكد من صحة المعرف وأن البوت أدمن في القناة.', token);
+    }
+    return;
+  }
+
+  // إضافة مستخدم للتحقق
+  if (adminState.action === 'verif_add_user' && adminState.step === 'text') {
+    const targetId = text.trim();
+    if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
+    data.verification.verifiedUsers[targetId] = { name: 'مستخدم', date: new Date().toISOString() };
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    await sendMessage(chatId, '✅ تم إضافة المستخدم ' + targetId, token);
+    const menu = verificationListMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // حذف مستخدم من التحقق
+  if (adminState.action === 'verif_remove_user' && adminState.step === 'text') {
+    const targetId = text.trim();
+    if (data.verification.verifiedUsers && data.verification.verifiedUsers[targetId]) {
+      delete data.verification.verifiedUsers[targetId];
+    }
+    if (data.verification.rejectedUsers && data.verification.rejectedUsers[targetId]) {
+      delete data.verification.rejectedUsers[targetId];
+    }
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    await sendMessage(chatId, '✅ تم حذف المستخدم ' + targetId, token);
+    const menu = verificationListMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // إضافة أمر
+  if (adminState.action === 'cmd_add' && adminState.step === 'cmd') {
+    adminState.temp.cmd = text;
+    adminState.step = 'desc';
+    await sendMessage(chatId, '📝 <b>أدخل وصف الأمر:</b>', token);
+    return;
+  }
+  if (adminState.action === 'cmd_add' && adminState.step === 'desc') {
+    if (!data.commands) data.commands = {};
+    data.commands[adminState.temp.cmd] = { description: text, enabled: true };
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    await updateBotCommands(token);
+    const menu = commandsMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم إضافة الأمر /' + adminState.temp.cmd, token);
+    return;
+  }
+
+  // تعديل أمر
+  if (adminState.action === 'cmd_edit' && adminState.step === 'cmd') {
+    const cmd = text.replace('/', '');
+    if (data.commands && data.commands[cmd]) {
+      adminState.temp.editCmd = cmd;
+      adminState.step = 'desc';
+      await sendMessage(chatId, '📝 <b>أدخل الوصف الجديد لـ /' + cmd + ':</b>\n\nالحالي: ' + data.commands[cmd].description, token);
+    } else {
+      await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
+    }
+    return;
+  }
+  if (adminState.action === 'cmd_edit' && adminState.step === 'desc') {
+    const cmd = adminState.temp.editCmd;
+    if (data.commands && data.commands[cmd]) {
+      data.commands[cmd].description = text;
+      await saveData(env);
+      adminState.action = null;
+      adminState.step = null;
+      await updateBotCommands(token);
+      const menu = commandsMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, '✅ تم تحديث /' + cmd, token);
+    }
+    return;
+  }
+
+  // حذف أمر
+  if (adminState.action === 'cmd_delete' && adminState.step === 'cmd') {
+    const cmd = text.replace('/', '');
+    if (data.commands && data.commands[cmd]) {
+      delete data.commands[cmd];
+      await saveData(env);
+      adminState.action = null;
+      adminState.step = null;
+      await updateBotCommands(token);
+      const menu = commandsMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, '✅ تم حذف /' + cmd, token);
+    } else {
+      await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
+    }
+    return;
+  }
+
+  // تفعيل/تعطيل أمر
+  if (adminState.action === 'cmd_toggle' && adminState.step === 'cmd') {
+    const cmd = text.replace('/', '');
+    if (data.commands && data.commands[cmd]) {
+      data.commands[cmd].enabled = !data.commands[cmd].enabled;
+      await saveData(env);
+      adminState.action = null;
+      adminState.step = null;
+      await updateBotCommands(token);
+      const menu = commandsMenu();
+      await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+      await sendMessage(chatId, '✅ تم ' + (data.commands[cmd].enabled ? 'تفعيل' : 'تعطيل') + ' /' + cmd, token);
+    } else {
+      await sendMessage(chatId, '❌ /' + cmd + ' غير موجود', token);
+    }
+    return;
+  }
+
+  // ===== إعدادات الاشتراك الإجباري =====
+  if (adminState.action === 'fs_setting_verify_text' && adminState.step === 'waiting_input') {
+    data.forcedSubscription.settings.verifyButtonText = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = forcedSubscriptionSettingsMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث زر التحقق', token);
+    return;
+  }
+  if (adminState.action === 'fs_setting_grouped_message' && adminState.step === 'waiting_input') {
+    data.forcedSubscription.settings.groupedMessage = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    const menu = forcedSubscriptionSettingsMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    await sendMessage(chatId, '✅ تم تحديث رسالة العرض', token);
+    return;
+  }
+
+  // ===== إضافة اشتراك (استكمال البيانات) =====
+  if (adminState.action === 'fs_add_data' && adminState.step === 'waiting_id') {
+    const type = adminState.temp.type;
+    const id = text.trim();
+    adminState.temp.id = id;
+    adminState.step = 'waiting_name';
+    await sendMessage(chatId, '📝 <b>أدخل اسم الاشتراك:</b>', token);
+    return;
+  }
+  if (adminState.action === 'fs_add_data' && adminState.step === 'waiting_name') {
+    const name = text.trim();
+    const type = adminState.temp.type;
+    const id = adminState.temp.id;
+    // إنشاء كائن الاشتراك
+    const newSub = {
+      id: Date.now().toString(36),
+      type: type,
+      name: name,
+      link: (type === 'link' ? id : (id.startsWith('@') || id.startsWith('-100') ? id : '@' + id)),
+      enabled: true,
+      order: (data.forcedSubscription.list || []).length + 1
+    };
+    if (!data.forcedSubscription.list) data.forcedSubscription.list = [];
+    data.forcedSubscription.list.push(newSub);
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    // إرسال رسالة نجاح وإظهار القائمة
+    await sendMessage(chatId, '✅ <b>تم إضافة الاشتراك بنجاح!</b>\n\n' +
+                      '📌 النوع: ' + type + '\n' +
+                      '📌 الاسم: ' + name + '\n' +
+                      '📌 المعرف: ' + id, token);
+    const menu = forcedSubscriptionMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== تعديل اشتراك (استكمال) =====
+  if (adminState.action === 'fs_edit_data' && adminState.step === 'waiting_edit_value') {
+    const index = adminState.temp.index;
+    const field = adminState.temp.editField;
+    const fs = data.forcedSubscription;
+    if (!fs.list || !fs.list[index]) {
+      await sendMessage(chatId, '⚠️ الاشتراك غير موجود.', token);
+      return;
+    }
+    const sub = fs.list[index];
+    if (field === 'name') sub.name = text;
+    else if (field === 'link') sub.link = text;
+    else if (field === 'message') sub.message = text;
+    await saveData(env);
+    adminState.action = null;
+    adminState.step = null;
+    await sendMessage(chatId, '✅ تم تحديث الاشتراك.', token);
+    const menu = forcedSubscriptionMenu();
+    await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
+    return;
+  }
+
+  // ===== معالجة صورة الترحيب =====
+  if (adminState.action === 'upload_welcome_image' && adminState.step === 'waiting_image') {
+    // يتم التعامل مع الصور في handleUpdate (قسم الرسائل)
+    // لكن نضيف معالجة هنا إذا أرسل نص بدلاً من صورة
+    await sendMessage(chatId, '❌ يرجى إرسال صورة، وليس نص.', token);
+    return;
+  }
+
+  // أي إدخال آخر
+  await sendMessage(chatId, '⚠️ هذا الإجراء غير معروف. استخدم الأزرار.', token);
 }
