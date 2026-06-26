@@ -34,68 +34,6 @@ let data = {
 };
 
 const adminState = { action: null, step: null, temp: {} };
-const KV_KEYS = {
-  SETTINGS: 'bot_settings',
-  VERIFICATION: 'bot_verification',
-  PROTECTION: 'bot_protection',
-  NOTIFICATIONS: 'bot_notifications',
-  WELCOME: 'bot_welcome',
-  COMMANDS: 'bot_commands',
-  USERS: 'bot_users',
-  CONTENT: 'bot_content'
-};
-
-// ====================================================================
-// ========== دوال KV ==========
-// ====================================================================
-
-async function loadData(env) {
-  try {
-    const settings = await env.KV_NAMESPACE.get(KV_KEYS.SETTINGS, 'json');
-    if (settings) data.settings = settings;
-    
-    const verification = await env.KV_NAMESPACE.get(KV_KEYS.VERIFICATION, 'json');
-    if (verification) data.verification = verification;
-    
-    const protection = await env.KV_NAMESPACE.get(KV_KEYS.PROTECTION, 'json');
-    if (protection) data.protection = protection;
-    
-    const notifications = await env.KV_NAMESPACE.get(KV_KEYS.NOTIFICATIONS, 'json');
-    if (notifications) data.notifications = notifications;
-    
-    const welcome = await env.KV_NAMESPACE.get(KV_KEYS.WELCOME, 'json');
-    if (welcome) data.welcome = welcome;
-    
-    const commands = await env.KV_NAMESPACE.get(KV_KEYS.COMMANDS, 'json');
-    if (commands) data.commands = commands;
-    
-    const users = await env.KV_NAMESPACE.get(KV_KEYS.USERS, 'json');
-    if (users) data.users = users;
-    
-    const content = await env.KV_NAMESPACE.get(KV_KEYS.CONTENT, 'json');
-    if (content) data.content = content;
-    
-    console.log('✅ All data loaded');
-  } catch (error) {
-    console.error('Error loading data:', error);
-  }
-}
-
-async function saveData(env) {
-  try {
-    await env.KV_NAMESPACE.put(KV_KEYS.SETTINGS, JSON.stringify(data.settings));
-    await env.KV_NAMESPACE.put(KV_KEYS.VERIFICATION, JSON.stringify(data.verification));
-    await env.KV_NAMESPACE.put(KV_KEYS.PROTECTION, JSON.stringify(data.protection));
-    await env.KV_NAMESPACE.put(KV_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
-    await env.KV_NAMESPACE.put(KV_KEYS.WELCOME, JSON.stringify(data.welcome));
-    await env.KV_NAMESPACE.put(KV_KEYS.COMMANDS, JSON.stringify(data.commands));
-    await env.KV_NAMESPACE.put(KV_KEYS.USERS, JSON.stringify(data.users));
-    await env.KV_NAMESPACE.put(KV_KEYS.CONTENT, JSON.stringify(data.content));
-    console.log('✅ All data saved');
-  } catch (error) {
-    console.error('Error saving data:', error);
-  }
-}
 
 // ====================================================================
 // ========== دوال مساعدة ==========
@@ -398,20 +336,42 @@ function commandsMenu() {
   };
 }
 
-function getUserWelcome(isNewUser) {
+function getUserWelcome(isNewUser, isPending, isVerified, isRejected) {
   const text = data.welcome.text;
   const buttons = [];
   
-  if (isNewUser) {
+  // إذا كان المستخدم مرفوض
+  if (isRejected) {
+    return {
+      text: '❌ **طلبك مرفوض.**\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.',
+      keyboard: { remove_keyboard: true }
+    };
+  }
+  
+  // إذا كان في انتظار التحقق
+  if (isPending) {
+    return {
+      text: '⏳ **طلبك قيد المراجعة.**\n\nيرجى الانتظار حتى يتم التحقق من طلبك.',
+      keyboard: { remove_keyboard: true }
+    };
+  }
+  
+  // إذا كان محقق أو التحقق معطل
+  if (isVerified || !data.verification.enabled) {
+    return {
+      text: text + '\n\n📦 **يمكنك الآن استخدام البوت.**',
+      keyboard: { remove_keyboard: true }
+    };
+  }
+  
+  // مستخدم جديد يحتاج للتحقق
+  if (isNewUser || (!isVerified && data.verification.enabled)) {
     buttons.push([{ text: '▶️ بدء الاستخدام', callback_data: 'start_use' }]);
   }
   
   return {
     text: text,
-    keyboard: { 
-      inline_keyboard: buttons,
-      remove_keyboard: true
-    }
+    keyboard: { inline_keyboard: buttons }
   };
 }
 
@@ -422,7 +382,6 @@ function getUserWelcome(isNewUser) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    await loadData(env);
     
     setLogChannel(data.notifications.channelId);
     setLogEnabled(data.notifications.enabled);
@@ -521,7 +480,6 @@ async function handleUpdate(update, env) {
         data.welcome.text = text;
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         const menu = welcomeMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تحديث النص', token);
@@ -533,7 +491,6 @@ async function handleUpdate(update, env) {
         data.settings.stopMessage = text;
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         const menu = botSettingsMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تحديث رسالة الإيقاف', token);
@@ -546,7 +503,6 @@ async function handleUpdate(update, env) {
         data.verification[field] = text;
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         const menu = verificationMessagesMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تحديث الرسالة', token);
@@ -558,7 +514,6 @@ async function handleUpdate(update, env) {
         data.verification.channelId = text.trim();
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         const menu = verificationMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تعيين قناة التحقق: ' + text, token);
@@ -571,7 +526,6 @@ async function handleUpdate(update, env) {
         setLogChannel(text.trim());
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         const menu = notificationsMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
         await sendMessage(chatId, '✅ تم تعيين قناة الإشعارات: ' + text, token);
@@ -585,7 +539,6 @@ async function handleUpdate(update, env) {
         data.verification.verifiedUsers[targetId] = { name: 'مستخدم', date: new Date().toISOString() };
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         await sendMessage(chatId, '✅ تم إضافة المستخدم ' + targetId, token);
         const menu = verificationListMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -603,7 +556,6 @@ async function handleUpdate(update, env) {
         }
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         await sendMessage(chatId, '✅ تم حذف المستخدم ' + targetId, token);
         const menu = verificationListMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -623,7 +575,6 @@ async function handleUpdate(update, env) {
         data.commands[adminState.temp.cmd] = { description: text, enabled: true };
         adminState.action = null;
         adminState.step = null;
-        await saveData(env);
         await updateBotCommands(token);
         const menu = commandsMenu();
         await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -650,7 +601,6 @@ async function handleUpdate(update, env) {
           data.commands[cmd].description = text;
           adminState.action = null;
           adminState.step = null;
-          await saveData(env);
           await updateBotCommands(token);
           const menu = commandsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -666,7 +616,6 @@ async function handleUpdate(update, env) {
           delete data.commands[cmd];
           adminState.action = null;
           adminState.step = null;
-          await saveData(env);
           await updateBotCommands(token);
           const menu = commandsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -684,7 +633,6 @@ async function handleUpdate(update, env) {
           data.commands[cmd].enabled = !data.commands[cmd].enabled;
           adminState.action = null;
           adminState.step = null;
-          await saveData(env);
           await updateBotCommands(token);
           const menu = commandsMenu();
           await editMessage(adminState.temp.chatId, adminState.temp.msgId, menu.text, token, { reply_markup: menu.keyboard });
@@ -742,24 +690,27 @@ async function handleUpdate(update, env) {
           phone: contact.phone_number,
           date: new Date().toISOString()
         };
-        await saveData(env);
         
         await sendMessage(chatId, '⏳ تم استلام طلبك! جاري المراجعة...', token);
         return;
       }
     }
     
-    // المستخدم الجديد - /start
+    // المستخدم - /start
     if (text === '/start') {
       await sendLog(userId, username, name, '🔄 بدء', 'ضغط على /start', token);
       
+      // التحقق من حالة المستخدم
       const isNewUser = !data.users[userId];
+      const isPending = data.verification.pendingUsers && data.verification.pendingUsers[userId];
+      const isVerified = data.verification.verifiedUsers && data.verification.verifiedUsers[userId];
+      const isRejected = data.verification.rejectedUsers && data.verification.rejectedUsers[userId];
+      
       if (isNewUser) {
         data.users[userId] = { name: name, username: username, joined: new Date().toISOString() };
-        await saveData(env);
       }
       
-      const welcome = getUserWelcome(isNewUser);
+      const welcome = getUserWelcome(isNewUser, isPending, isVerified, isRejected);
       await sendMessage(chatId, welcome.text, token, { 
         reply_markup: welcome.keyboard,
         remove_keyboard: true 
@@ -819,7 +770,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'bot_toggle') {
     data.settings.botActive = !data.settings.botActive;
-    await saveData(env);
     const menu = botSettingsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -842,7 +792,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'verif_toggle') {
     data.verification.enabled = !data.verification.enabled;
-    await saveData(env);
     const menu = verificationMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -955,7 +904,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       if (!data.verification.verifiedUsers) data.verification.verifiedUsers = {};
       data.verification.verifiedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
-      await saveData(env);
       
       await editMessage(chatId, msgId, '✅ **تم قبول المستخدم**\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.successMessage, token);
@@ -971,7 +919,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
       if (!data.verification.rejectedUsers) data.verification.rejectedUsers = {};
       data.verification.rejectedUsers[targetId] = { name: user.name, date: new Date().toISOString() };
       delete data.verification.pendingUsers[targetId];
-      await saveData(env);
       
       await editMessage(chatId, msgId, '❌ **تم رفض المستخدم**\n\n' + user.name, token);
       await sendMessage(targetId, data.verification.failMessage, token);
@@ -988,7 +935,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   
   if (cbData === 'protect_toggle') {
     data.protection.enabled = !data.protection.enabled;
-    await saveData(env);
     const menu = protectionMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
@@ -1004,7 +950,6 @@ async function handleAdminCallback(cbData, chatId, msgId, token, env) {
   if (cbData === 'notif_toggle') {
     data.notifications.enabled = !data.notifications.enabled;
     setLogEnabled(data.notifications.enabled);
-    await saveData(env);
     const menu = notificationsMenu();
     await editMessage(chatId, msgId, menu.text, token, { reply_markup: menu.keyboard });
     return;
