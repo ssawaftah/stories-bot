@@ -146,21 +146,24 @@ async function telegramRequest(method, token, payload) {
 }
 
 // رفع فيديو binary عبر multipart/form-data (احتياطي عند رفض Telegram للرابط المباشر)
-// رفع فيديو كمستند — بدون إعادة ترميز فيحافظ على الأبعاد الأصلية تماماً
-async function telegramUploadDocument(chatId, videoBlob, caption, token, extra) {
-  const url = `https://api.telegram.org/bot${token}/sendDocument`;
+// رفع فيديو binary كـ video عبر multipart — مع تحديد الأبعاد للحفاظ عليها
+async function telegramUploadVideoFile(chatId, videoBlob, caption, token, extra, width, height) {
+  const url = `https://api.telegram.org/bot${token}/sendVideo`;
   const form = new FormData();
   form.append("chat_id", String(chatId));
   form.append("parse_mode", "HTML");
   form.append("caption", caption || "");
-  form.append("document", videoBlob, "video.mp4");
+  form.append("video", videoBlob, "video.mp4");
+  form.append("supports_streaming", "true");
+  if (width)  form.append("width",  String(width));
+  if (height) form.append("height", String(height));
   if (extra?.reply_markup) form.append("reply_markup", JSON.stringify(extra.reply_markup));
   if (data.protection.enabled && !extra?.bypass_protection) form.append("protect_content", "true");
   try {
     const res = await fetch(url, { method: "POST", body: form });
     return await res.json();
   } catch (e) {
-    console.error("telegramUploadDocument error:", e);
+    console.error("telegramUploadVideoFile error:", e);
     return { ok: false, description: e.message };
   }
 }
@@ -170,8 +173,8 @@ function isTwitterUrl(text) {
   return /https?:\/\/(www\.)?(twitter\.com|x\.com)\/[^/]+\/status\/\d+/i.test(text.trim());
 }
 
-// جلب رابط فيديو مباشر من تويتر/X عبر vxtwitter
-async function fetchTwitterVideoUrl(tweetUrl) {
+// جلب معلومات فيديو تويتر/X (رابط + أبعاد) عبر vxtwitter
+async function fetchTwitterVideoInfo(tweetUrl) {
   try {
     const match = tweetUrl.trim().match(/(?:twitter\.com|x\.com)\/[^/]+\/status\/(\d+)/i);
     if (!match) return null;
@@ -181,47 +184,121 @@ async function fetchTwitterVideoUrl(tweetUrl) {
     });
     if (!res.ok) return null;
     const json = await res.json();
-    // json.media_extended أو json.mediaURLs
-    const mediaUrls = json.mediaURLs || [];
     const extended = json.media_extended || [];
-    // نُفضّل أعلى جودة — آخر عنصر في extended (عادةً الأعلى)
-    const videoFromExtended = extended
-      .filter((m) => m.type === "video")
-      .map((m) => m.url)
-      .pop();
-    const videoFromUrls = mediaUrls.find((u) => u.includes(".mp4") || u.includes("video"));
-    return videoFromExtended || videoFromUrls || null;
+    const mediaUrls = json.mediaURLs || [];
+
+    // نختار أعلى جودة — آخر عنصر video في extended (عادةً الأعلى جودةً)
+    const videoItem = extended.filter((m) => m.type === "video").pop();
+    if (videoItem?.url) {
+      return {
+        url: videoItem.url,
+        width:  videoItem.size?.width  || videoItem.width  || null,
+        height: videoItem.size?.height || videoItem.height || null,
+      };
+    }
+    const fallbackUrl = mediaUrls.find((u) => u.includes(".mp4") || u.includes("video"));
+    return fallbackUrl ? { url: fallbackUrl, width: null, height: null } : null;
   } catch (e) {
-    console.error("fetchTwitterVideoUrl error:", e);
+    console.error("fetchTwitterVideoInfo error:", e);
     return null;
   }
 }
 
-// جلب فيديو تويتر ورفعه لتيليجرام
-// يُعيد { fileId, partType } أو null
-// partType = "video"    → أُرسل كـ sendVideo (رابط مباشر)
-// partType = "document" → أُرسل كـ sendDocument (يحافظ على الأبعاد الأصلية)
+// جلب فيديو تويتر/X ورفعه لتيليجرام كـ VIDEO (ليس ملف)
+// يُعيد { fileId, partType:"video" } أو null
 async function sendTwitterVideo(chatId, tweetUrl, caption, token, extra) {
-  const directUrl = await fetchTwitterVideoUrl(tweetUrl);
-  if (!directUrl) return null;
+  const info = await fetchTwitterVideoInfo(tweetUrl);
+  if (!info) return null;
 
-  // المحاولة 1: تمرير الرابط مباشرةً لتيليجرام كـ video
-  const r1 = await sendVideo(chatId, directUrl, caption, token, extra);
+  // المحاولة 1: تمرير الرابط مباشرةً لتيليجرام
+  const r1 = await sendVideo(chatId, info.url, caption, token, extra);
   const fid1 = r1?.result?.video?.file_id;
   if (r1?.ok && fid1) return { fileId: fid1, partType: "video" };
 
-  // المحاولة 2: تحميل الفيديو ورفعه كـ document (بدون إعادة ترميز = أبعاد محفوظة)
+  // المحاولة 2: تحميل الفيديو ورفعه كـ video مع الأبعاد الأصلية
   try {
-    const videoRes = await fetch(directUrl, { headers: { "User-Agent": "TelegramBot/1.0" } });
+    const videoRes = await fetch(info.url, { headers: { "User-Agent": "TelegramBot/1.0" } });
     if (!videoRes.ok) return null;
     const blob = await videoRes.blob();
-    const r2 = await telegramUploadDocument(chatId, blob, caption, token, extra);
-    const fid2 = r2?.result?.document?.file_id;
-    if (r2?.ok && fid2) return { fileId: fid2, partType: "document" };
+    const r2 = await telegramUploadVideoFile(chatId, blob, caption, token, extra, info.width, info.height);
+    const fid2 = r2?.result?.video?.file_id;
+    if (r2?.ok && fid2) return { fileId: fid2, partType: "video" };
   } catch (e) {
     console.error("sendTwitterVideo download error:", e);
   }
   return null;
+}
+
+// ====================================================================
+// ========== كشف دولة رقم الهاتف ==========
+// ====================================================================
+function getCountryFromPhone(phone) {
+  if (!phone) return { flag: "🌍", name: "غير محدد" };
+  const p = String(phone).replace(/\D/g, "");
+  const prefixes = [
+    // دول عربية
+    { prefix: "9665", flag: "🇸🇦", name: "السعودية" },
+    { prefix: "9714", flag: "🇦🇪", name: "الإمارات" },
+    { prefix: "9715", flag: "🇦🇪", name: "الإمارات" },
+    { prefix: "966", flag: "🇸🇦", name: "السعودية" },
+    { prefix: "971", flag: "🇦🇪", name: "الإمارات" },
+    { prefix: "965", flag: "🇰🇼", name: "الكويت" },
+    { prefix: "974", flag: "🇶🇦", name: "قطر" },
+    { prefix: "973", flag: "🇧🇭", name: "البحرين" },
+    { prefix: "968", flag: "🇴🇲", name: "عُمان" },
+    { prefix: "967", flag: "🇾🇪", name: "اليمن" },
+    { prefix: "962", flag: "🇯🇴", name: "الأردن" },
+    { prefix: "961", flag: "🇱🇧", name: "لبنان" },
+    { prefix: "963", flag: "🇸🇾", name: "سوريا" },
+    { prefix: "964", flag: "🇮🇶", name: "العراق" },
+    { prefix: "972", flag: "🇵🇸", name: "فلسطين" },
+    { prefix: "970", flag: "🇵🇸", name: "فلسطين" },
+    { prefix: "20",  flag: "🇪🇬", name: "مصر" },
+    { prefix: "212", flag: "🇲🇦", name: "المغرب" },
+    { prefix: "213", flag: "🇩🇿", name: "الجزائر" },
+    { prefix: "216", flag: "🇹🇳", name: "تونس" },
+    { prefix: "218", flag: "🇱🇾", name: "ليبيا" },
+    { prefix: "249", flag: "🇸🇩", name: "السودان" },
+    { prefix: "252", flag: "🇸🇴", name: "الصومال" },
+    { prefix: "222", flag: "🇲🇷", name: "موريتانيا" },
+    { prefix: "253", flag: "🇩🇯", name: "جيبوتي" },
+    { prefix: "269", flag: "🇰🇲", name: "جزر القمر" },
+    // دول عالمية كبرى
+    { prefix: "1",   flag: "🇺🇸", name: "أمريكا" },
+    { prefix: "44",  flag: "🇬🇧", name: "بريطانيا" },
+    { prefix: "33",  flag: "🇫🇷", name: "فرنسا" },
+    { prefix: "49",  flag: "🇩🇪", name: "ألمانيا" },
+    { prefix: "39",  flag: "🇮🇹", name: "إيطاليا" },
+    { prefix: "34",  flag: "🇪🇸", name: "إسبانيا" },
+    { prefix: "90",  flag: "🇹🇷", name: "تركيا" },
+    { prefix: "98",  flag: "🇮🇷", name: "إيران" },
+    { prefix: "92",  flag: "🇵🇰", name: "باكستان" },
+    { prefix: "91",  flag: "🇮🇳", name: "الهند" },
+    { prefix: "7",   flag: "🇷🇺", name: "روسيا" },
+    { prefix: "86",  flag: "🇨🇳", name: "الصين" },
+    { prefix: "55",  flag: "🇧🇷", name: "البرازيل" },
+    { prefix: "62",  flag: "🇮🇩", name: "إندونيسيا" },
+    { prefix: "60",  flag: "🇲🇾", name: "ماليزيا" },
+    { prefix: "234", flag: "🇳🇬", name: "نيجيريا" },
+    { prefix: "251", flag: "🇪🇹", name: "إثيوبيا" },
+    { prefix: "254", flag: "🇰🇪", name: "كينيا" },
+    { prefix: "27",  flag: "🇿🇦", name: "جنوب أفريقيا" },
+    { prefix: "61",  flag: "🇦🇺", name: "أستراليا" },
+    { prefix: "81",  flag: "🇯🇵", name: "اليابان" },
+    { prefix: "82",  flag: "🇰🇷", name: "كوريا الجنوبية" },
+  ];
+  // ترتيب تنازلي حسب طول البادئة لضمان المطابقة الأدق
+  prefixes.sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const { prefix, flag, name } of prefixes) {
+    if (p.startsWith(prefix)) return { flag, name };
+  }
+  return { flag: "🌍", name: "غير معروف" };
+}
+
+function formatPhoneWithFlag(phone) {
+  if (!phone) return "—";
+  const { flag, name } = getCountryFromPhone(phone);
+  return `${flag} <code>+${String(phone).replace(/\D/g, "")}</code> <i>(${name})</i>`;
 }
 
 function buildBasePayload(chatId, extra) {
@@ -635,38 +712,49 @@ function recordActivity(userId) {
 // ====================================================================
 
 function adminMenu() {
-  const contentCount = Object.keys(data.content?.items || {}).length;
+  const contentCount  = Object.keys(data.content?.items || {}).length;
+  const usersCount    = Object.keys(data.users || {}).length;
+  const pendingCount  = Object.keys(data.verification.pendingUsers || {}).length;
+  const pendingBadge  = pendingCount > 0 ? ` 🔴${pendingCount}` : "";
   return {
-    text: "🔹 <b>لوحة التحكم - الإصدار 2.0</b>\n\nاختر القسم:",
+    text:
+`╔══════════════════════╗
+     🛡️ <b>لوحة التحكم</b>
+╚══════════════════════╝
+
+👤 المستخدمون: <b>${usersCount}</b>   📁 المحتوى: <b>${contentCount}</b>
+⏳ طلبات معلقة: <b>${pendingCount}</b>
+
+<i>اختر القسم المطلوب 👇</i>`,
     keyboard: {
       inline_keyboard: [
         [
-          { text: "⚙️ الإعدادات", callback_data: "admin_settings" },
-          { text: "📊 الإحصائيات", callback_data: "admin_stats" },
+          { text: "⚙️ الإعدادات",        callback_data: "admin_settings" },
+          { text: "📊 الإحصائيات",       callback_data: "admin_stats"    },
         ],
         [
-          { text: "✏️ رسالة الترحيب", callback_data: "admin_welcome" },
-          { text: "📋 إدارة الأوامر", callback_data: "admin_commands" },
+          { text: "✏️ رسالة الترحيب",    callback_data: "admin_welcome"  },
+          { text: "📋 الأوامر",           callback_data: "admin_commands" },
         ],
         [
-          { text: "👥 المستخدمين", callback_data: "admin_users" },
-          { text: "🚫 المحظورين", callback_data: "admin_banned" },
+          { text: `👥 المستخدمون (${usersCount})`, callback_data: "admin_users"   },
+          { text: "🚫 المحظورون",          callback_data: "admin_banned"  },
         ],
         [
-          { text: "📢 رسالة جماعية", callback_data: "admin_broadcast" },
-          { text: "📨 رسالة مباشرة", callback_data: "admin_direct_msg" },
+          { text: "📢 رسالة جماعية",     callback_data: "admin_broadcast"     },
+          { text: "📨 رسالة مباشرة",     callback_data: "admin_direct_msg"    },
         ],
         [
-          {
-            text: "🔗 الاشتراك الإجباري",
-            callback_data: "admin_forced_subscription",
-          },
+          { text: "🔗 الاشتراك الإجباري", callback_data: "admin_forced_subscription" },
         ],
         [
           { text: `📁 إدارة المحتوى (${contentCount})`, callback_data: "admin_content" },
         ],
         [
-          { text: "👮 الأدمنات", callback_data: "admin_admins" },
+          { text: `✅ طلبات التحقق${pendingBadge}`, callback_data: "settings_verification" },
+        ],
+        [
+          { text: "👮 الأدمنات",  callback_data: "admin_admins"  },
           { text: "💾 نسخ احتياطي", callback_data: "admin_backup" },
         ],
       ],
@@ -739,35 +827,35 @@ function statsMenu() {
     ? Object.keys(data.stats.dailyActive[todayKey]).length
     : 0;
   const totalMsgs = data.stats?.totalMessages || 0;
-
   const broadcastHistory = data.broadcast?.history || [];
-
   const contentItems = Object.values(data.content?.items || {});
   const publishedContent = contentItems.filter((i) => i.status === "published").length;
+  const verifRate = users.length > 0 ? Math.round((verified.length / users.length) * 100) : 0;
 
   return {
-    text: `📊 <b>إحصائيات البوت</b>
+    text:
+`📊 <b>إحصائيات البوت</b>
+━━━━━━━━━━━━━━━━━━━━
 
-👥 <b>المستخدمون:</b>
-  • الإجمالي: <b>${users.length}</b>
-  • نشطون اليوم: <b>${todayActive}</b>
-  • محظورون: <b>${banned.length}</b>
+👥 <b>المستخدمون</b>
+├ الإجمالي:    <b>${users.length}</b>
+├ نشطون اليوم: <b>${todayActive}</b>
+└ محظورون:     <b>${banned.length}</b>
 
-✅ <b>التحقق:</b>
-  • محققون: <b>${verified.length}</b>
-  • معلقون: <b>${pending.length}</b>
-  • مرفوضون: <b>${rejected.length}</b>
+🔐 <b>التحقق</b>  <i>(${verifRate}% من الكل)</i>
+├ محققون:   <b>${verified.length}</b>
+├ معلقون:   <b>${pending.length}</b>
+└ مرفوضون: <b>${rejected.length}</b>
 
-🔗 <b>الاشتراك الإجباري:</b>
-  • الاشتراكات: <b>${fsList.length}</b>
-  • أكملوا: <b>${fsCompleted}</b>
+🔗 <b>الاشتراك الإجباري</b>
+├ القنوات: <b>${fsList.length}</b>
+└ أكملوا:  <b>${fsCompleted}</b>
 
-📁 <b>المحتوى:</b>
-  • الإجمالي: <b>${contentItems.length}</b>
-  • منشور: <b>${publishedContent}</b>
+📁 <b>المحتوى</b>
+├ الإجمالي: <b>${contentItems.length}</b>
+└ منشور:    <b>${publishedContent}</b>
 
-📋 <b>الأوامر:</b> ${cmds.length}
-📢 <b>رسائل جماعية:</b> ${broadcastHistory.length}
+📋 <b>الأوامر:</b> ${cmds.length}   📢 <b>البث:</b> ${broadcastHistory.length}
 📩 <b>إجمالي الرسائل:</b> ${totalMsgs}`,
     keyboard: {
       inline_keyboard: [
@@ -1042,10 +1130,11 @@ function usersListMenu(page) {
       const u = data.users[uid];
       const isBanned = data.bannedUsers?.[uid] ? " 🚫" : "";
       const isVerified = data.verification.verifiedUsers?.[uid] ? " ✅" : "";
+      const phoneCountry = getCountryFromPhone(u.phone);
       text += `👤 <b>${u.name || "غير معروف"}</b>${isBanned}${isVerified}\n`;
       text += `🔢 <code>${uid}</code>`;
-      if (u.username) text += ` | @${u.username}`;
-      if (u.phone) text += `\n📱 ${u.phone}`;
+      if (u.username) text += `  |  @${u.username}`;
+      if (u.phone) text += `\n📱 ${phoneCountry.flag} <code>+${String(u.phone).replace(/\D/g,"")}</code> <i>${phoneCountry.name}</i>`;
       if (u.joined) text += `\n📅 ${u.joined}`;
       text += "\n─────────────────\n";
     }
@@ -1720,19 +1809,24 @@ async function handleUpdate(update, env) {
         );
         return;
       }
-      const adminMsg = `👤 <b>طلب تحقق جديد!</b>
+      const countryInfo = getCountryFromPhone(contact.phone_number);
+      const adminMsg =
+`🔔 <b>طلب تحقق جديد</b>
+━━━━━━━━━━━━━━━━━━━━
 
 👤 <b>الاسم:</b> ${name}
-🆔 <b>اليوزرنيم:</b> @${username || "لا يوجد"}
+🆔 <b>اليوزرنيم:</b> ${username ? "@" + username : "<i>لا يوجد</i>"}
 🔢 <b>المعرف:</b> <code>${userId}</code>
-📱 <b>الهاتف:</b> <code>${contact.phone_number}</code>
+📱 <b>الهاتف:</b> <code>+${String(contact.phone_number).replace(/\D/g,"")}</code>
+${countryInfo.flag} <b>الدولة:</b> ${countryInfo.name}
 
-📌 اضغط للقبول أو الرفض:`;
+📅 <b>التاريخ:</b> ${formatDate(new Date().toISOString())}
+━━━━━━━━━━━━━━━━━━━━`;
       const kb = {
         inline_keyboard: [
           [
             { text: "✅ قبول", callback_data: "verif_approve_" + userId },
-            { text: "❌ رفض", callback_data: "verif_reject_" + userId },
+            { text: "❌ رفض",  callback_data: "verif_reject_"  + userId },
           ],
         ],
       };
@@ -3132,18 +3226,27 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
   if (cbData === "verif_pending") {
     const pending = Object.entries(data.verification.pendingUsers || {});
     if (pending.length === 0) {
-      await sendMessage(chatId, "⏳ لا توجد طلبات معلقة.", token);
+      await editMessage(chatId, msgId, "⏳ <b>لا توجد طلبات معلقة حالياً</b>", token, {
+        reply_markup: { inline_keyboard: [[{ text: "🔙 رجوع", callback_data: "verif_back" }]] },
+      });
       return;
     }
-    let text = `⏳ <b>الطلبات المعلقة (${pending.length})</b>\n\n`;
+    let text = `⏳ <b>الطلبات المعلقة</b> — <b>${pending.length}</b> طلب\n━━━━━━━━━━━━━━━━━━━━\n\n`;
     const buttons = [];
-    for (const [id, u] of pending.slice(0, 15)) {
-      text += `👤 ${u.name || "غير معروف"} | <code>${id}</code>\n📱 ${u.phone || "-"} | 📅 ${formatDate(u.date)}\n─────\n`;
+    for (const [id, u] of pending.slice(0, 10)) {
+      const c = getCountryFromPhone(u.phone);
+      text += `👤 <b>${u.name || "غير معروف"}</b>\n`;
+      text += `🔢 <code>${id}</code>`;
+      if (u.username) text += `  |  @${u.username}`;
+      text += `\n📱 <code>+${String(u.phone || "").replace(/\D/g,"")}</code>  ${c.flag} ${c.name}\n`;
+      text += `📅 ${formatDate(u.date)}\n`;
+      text += `─────────────────\n`;
       buttons.push([
-        { text: `✅ ${u.name || id}`, callback_data: "verif_approve_" + id },
-        { text: "❌ رفض", callback_data: "verif_reject_" + id },
+        { text: `✅ قبول — ${u.name || id}`, callback_data: "verif_approve_" + id },
+        { text: "❌ رفض",                    callback_data: "verif_reject_"  + id },
       ]);
     }
+    if (pending.length > 10) text += `\n<i>... و ${pending.length - 10} طلبات أخرى</i>`;
     buttons.push([{ text: "🔙 رجوع", callback_data: "verif_back" }]);
     await editMessage(chatId, msgId, text, token, {
       reply_markup: { inline_keyboard: buttons },
@@ -3154,13 +3257,20 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
   if (cbData === "verif_list_verified") {
     const v = data.verification.verifiedUsers || {};
     const keys = Object.keys(v);
-    let text = `✅ <b>المستخدمون المحققون (${keys.length})</b>\n\n`;
-    if (keys.length === 0) text += "لا يوجد.";
-    else
-      keys.slice(0, 20).forEach((id) => {
-        text += `• <code>${id}</code> - ${v[id].name || "غير معروف"}\n`;
+    let text = `✅ <b>المستخدمون المحققون</b> — <b>${keys.length}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n`;
+    if (keys.length === 0) {
+      text += "لا يوجد مستخدمون محققون بعد.";
+    } else {
+      keys.slice(0, 15).forEach((id) => {
+        const u = v[id];
+        const c = getCountryFromPhone(u.phone);
+        text += `👤 <b>${u.name || "غير معروف"}</b>  ${u.phone ? c.flag : ""}\n`;
+        text += `🔢 <code>${id}</code>`;
+        if (u.phone) text += `  📱 <code>+${String(u.phone).replace(/\D/g,"")}</code>`;
+        text += `\n📅 ${formatDate(u.date)}\n─────\n`;
       });
-    if (keys.length > 20) text += `\n... و ${keys.length - 20} آخرون`;
+      if (keys.length > 15) text += `\n<i>... و ${keys.length - 15} آخرون</i>`;
+    }
     await sendMessage(chatId, text, token, { bypass_protection: true });
     return;
   }
@@ -3195,6 +3305,7 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
         data.verification.verifiedUsers = {};
       data.verification.verifiedUsers[targetId] = {
         name: user.name,
+        phone: user.phone,
         date: new Date().toISOString(),
         reapproved: true,
       };
@@ -3203,11 +3314,17 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
       await sendMessage(targetId, "✅ تم قبول طلبك!\n\n" + data.verification.successMessage, token, {
         reply_markup: getUserKeyboard(),
       });
-      await editMessage(
-        chatId,
-        msgId,
-        `✅ تم قبول ${user.name || targetId}`,
-        token,
+      const rc = getCountryFromPhone(user.phone);
+      await editMessage(chatId, msgId,
+`✅ <b>تمت إعادة قبول المستخدم</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👤 <b>${user.name || "غير معروف"}</b>
+🆔 ${user.username ? "@" + user.username : "<i>لا يوجد يوزرنيم</i>"}
+🔢 <code>${targetId}</code>
+${user.phone ? `📱 <code>+${String(user.phone).replace(/\D/g,"")}</code>  ${rc.flag} ${rc.name}` : ""}
+
+📅 ${formatDate(new Date().toISOString())}`, token,
       );
     }
     return;
@@ -3255,13 +3372,18 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
       }
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
-      await editMessage(
-        chatId,
-        msgId,
-        `✅ <b>تم قبول المستخدم</b>\n${user.name}\n<code>${targetId}</code>`,
-        token,
-      );
-      // إرسال رسالة القبول مع لوحة مفاتيح المستخدم
+      const approveCountry = getCountryFromPhone(user.phone);
+      await editMessage(chatId, msgId,
+`✅ <b>تم قبول المستخدم</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👤 <b>${user.name || "غير معروف"}</b>
+🆔 ${user.username ? "@" + user.username : "<i>لا يوجد يوزرنيم</i>"}
+🔢 <code>${targetId}</code>
+📱 <code>+${String(user.phone || "").replace(/\D/g,"")}</code>
+${approveCountry.flag} ${approveCountry.name}
+
+📅 ${formatDate(new Date().toISOString())}`, token);
       await sendMessage(targetId, data.verification.successMessage, token, {
         reply_markup: getUserKeyboard(),
       });
@@ -3277,17 +3399,24 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
         data.verification.rejectedUsers = {};
       data.verification.rejectedUsers[targetId] = {
         name: user.name,
+        username: user.username,
         phone: user.phone,
         date: new Date().toISOString(),
       };
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
-      await editMessage(
-        chatId,
-        msgId,
-        `❌ <b>تم رفض المستخدم</b>\n${user.name}\n<code>${targetId}</code>`,
-        token,
-      );
+      const rejectCountry = getCountryFromPhone(user.phone);
+      await editMessage(chatId, msgId,
+`❌ <b>تم رفض المستخدم</b>
+━━━━━━━━━━━━━━━━━━━━
+
+👤 <b>${user.name || "غير معروف"}</b>
+🆔 ${user.username ? "@" + user.username : "<i>لا يوجد يوزرنيم</i>"}
+🔢 <code>${targetId}</code>
+📱 <code>+${String(user.phone || "").replace(/\D/g,"")}</code>
+${rejectCountry.flag} ${rejectCountry.name}
+
+📅 ${formatDate(new Date().toISOString())}`, token);
       await sendMessage(targetId, data.verification.failMessage, token);
     }
     return;
