@@ -1,5 +1,5 @@
 // ====================================================================
-// ========== بوت تيليجرام المتكامل المطوّر - الإصدار 2.2 ==========
+// ========== بوت تيليجرام المتكامل المطوّر - الإصدار 2.3 ==========
 // ====================================================================
 
 const DEFAULT_DATA = {
@@ -76,7 +76,6 @@ const DEFAULT_DATA = {
     botStopped: "⏸️ البوت متوقف حالياً. يرجى المحاولة لاحقاً.",
     bannedUser: "🚫 أنت محظور من استخدام هذا البوت.",
     accessDenied: "⚠️ هذا الإجراء للأدمن فقط",
-    // ... يمكن إضافة المزيد حسب الحاجة
   },
   stats: { totalMessages: 0, totalCommands: 0, dailyActive: {} },
 };
@@ -464,18 +463,21 @@ async function checkUserPermissions(userId, chatId, token, env) {
   return true;
 }
 
-// دالة إنشاء لوحة المفاتيح الرئيسية (inline keyboard)
-function getUserInlineKeyboard() {
+// ===== دالة إنشاء لوحة المفاتيح الرئيسية (keyboard) =====
+function getUserKeyboard() {
   const buttons = data.buttons?.items || [];
   const rows = [];
-  // الأزرار الافتراضية أولاً
-  rows.push([{ text: "🔍 البحث عن محتوى", callback_data: "search_content" }]);
-  rows.push([{ text: "📞 تواصل معنا", callback_data: "contact_us" }]);
-  // ثم الأزرار المخصصة (بروابط)
+  // الأزرار الافتراضية
+  rows.push([{ text: "🔍 البحث عن محتوى" }, { text: "📞 تواصل معنا" }]);
+  // الأزرار المخصصة
   for (const btn of buttons) {
-    rows.push([{ text: btn.label, url: btn.url }]);
+    rows.push([{ text: btn.label }]);
   }
-  return { inline_keyboard: rows };
+  return {
+    keyboard: rows,
+    resize_keyboard: true,
+    persistent: true,
+  };
 }
 
 function generateContentId() {
@@ -505,7 +507,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   };
   if (isVerified || !data.verification.enabled) {
     const text = data.texts.welcomeRegistered || "📦 <b>مرحباً بعودتك!</b>";
-    return { text, mediaType: null, mediaFileId: null, buttons: null, userKeyboard: getUserInlineKeyboard() };
+    return { text, mediaType: null, mediaFileId: null, buttons: null, userKeyboard: getUserKeyboard() };
   }
   const text = data.texts.welcomeNew || "🎉 <b>مرحباً بك في البوت!</b>\n\nيمكنك استخدام البوت للوصول إلى المحتوى.";
   return { text, mediaType: data.welcome.mediaType, mediaFileId: data.welcome.mediaFileId, buttons: [[{ text: "▶️ بدء الاستخدام", callback_data: "start_use" }]], userKeyboard: null };
@@ -534,12 +536,14 @@ function buttonsMenu() {
 function textsManagementMenu() {
   const t = data.texts || {};
   const keys = Object.keys(t);
-  let listText = keys.map(k => `• <b>${k}</b>: ${t[k].substring(0, 30)}...`).join("\n");
+  let listText = keys.length === 0 ? "لا توجد نصوص مخصصة." : keys.map(k => `• <b>${k}</b>: ${t[k].substring(0, 40)}...`).join("\n");
   return {
-    text: `✏️ <b>إدارة النصوص</b>\n\n📌 عدد النصوص: ${keys.length}\n\n━━━ <b>قائمة النصوص</b> ━━━\n${listText || "لا توجد نصوص"}\n\n🔹 اختر الإجراء:\nأرسل <code>/edit_text [المفتاح] [النص الجديد]</code> لتعديل نص.`,
-    keyboard: { inline_keyboard: [
-      [{ text: "🔙 رجوع", callback_data: "admin_back" }],
-    ]},
+    text: `✏️ <b>إدارة النصوص المخصصة</b>\n\n📌 عدد النصوص: ${keys.length}\n\n━━━ <b>قائمة النصوص</b> ━━━\n${listText}\n\n🔹 لتعديل أي نص، استخدم الأمر:\n<code>/edit_text [المفتاح] [النص الجديد]</code>\n\nمثال:\n<code>/edit_text welcomeNew أهلاً بك في البوت!</code>`,
+    keyboard: {
+      inline_keyboard: [
+        [{ text: "🔙 رجوع", callback_data: "admin_back" }]
+      ]
+    }
   };
 }
 
@@ -563,10 +567,10 @@ async function deliverContent(chatId, contentId, token) {
   const item = data.content?.items?.[contentId];
   if (!item || !item.parts || item.parts.length === 0) {
     const msg = (data.texts.contentNotFound || "❌ لم يتم العثور على محتوى بالرقم <code>{id}</code>.").replace(/{id}/g, contentId);
-    await sendMessage(chatId, msg, token, { reply_markup: getUserInlineKeyboard() });
+    await sendMessage(chatId, msg, token, { reply_markup: getUserKeyboard() });
     return false;
   }
-  const kb = { reply_markup: getUserInlineKeyboard() };
+  const kb = { reply_markup: getUserKeyboard() };
   await sendMessage(chatId, `<b>${item.title}</b>\n\nرقم المحتوى:\n<code>${item.id}</code>`, token, kb);
   for (let i = 0; i < item.parts.length; i++) {
     const part = item.parts[i];
@@ -1015,7 +1019,7 @@ export default {
     setLogEnabled(data.notifications.enabled);
     setLogAllActions(data.notifications.logAllActions !== false);
 
-    if (url.pathname === "/") return new Response("🤖 Bot v2.2 running!");
+    if (url.pathname === "/") return new Response("🤖 Bot v2.3 running!");
     if (url.pathname === "/webhook" && request.method === "POST") {
       try {
         const body = await request.json();
@@ -1071,7 +1075,7 @@ async function handleUpdate(update, env) {
     }
 
     // الكولباك المسموح بها للمستخدمين غير الأدمن
-    const allowedCallbacks = ["start_use", "check_subscription", "noop", "search_content", "contact_us"];
+    const allowedCallbacks = ["start_use", "check_subscription", "noop"];
     const isFsLink = cbData.startsWith("fs_link_done_");
     const isVerifApproveReject = cbData.startsWith("verif_approve_") || cbData.startsWith("verif_reject_");
     const isVerifReapprove = cbData.startsWith("verif_reapprove_");
@@ -1104,7 +1108,7 @@ async function handleUpdate(update, env) {
         });
       } else {
         await sendMessage(chatId, data.texts.welcomeRegistered || "📦 <b>مرحباً بعودتك!</b>", token, {
-          reply_markup: getUserInlineKeyboard(),
+          reply_markup: getUserKeyboard(),
         });
       }
       await answerCallback(q.id, "", token);
@@ -1127,38 +1131,13 @@ async function handleUpdate(update, env) {
         }
         const welcome = getWelcomeForUser(false, false, true, false);
         await sendMedia(chatId, welcome.mediaType, welcome.mediaFileId, welcome.text, token, {
-          reply_markup: getUserInlineKeyboard(),
+          reply_markup: getUserKeyboard(),
         });
       } else {
         await answerCallback(q.id, data.texts.notSubscribed || "❌ لم تكمل جميع الاشتراكات!", token, true);
         await showForcedSubscription(chatId, userId, token);
       }
       await saveData(env);
-      await answerCallback(q.id, "", token);
-      return;
-    }
-
-    if (cbData === "search_content") {
-      const canAccess = data.verification.verifiedUsers?.[userId] || !data.verification.enabled;
-      if (!canAccess) {
-        await answerCallback(q.id, data.texts.notVerified || "🔐 يجب إكمال التحقق أولاً.", token, true);
-        return;
-      }
-      const user = data.users[userId] || {};
-      await sendLog(userId, user.username, user.name, "🔍 بحث", "بدأ عملية البحث عن محتوى", token);
-      if (!adminState[userId]) adminState[userId] = { action: null, step: null, temp: {} };
-      adminState[userId] = { action: "user_content_search", step: "waiting_id", temp: {} };
-      const prompt = data.texts.searchPrompt || data.content?.searchPrompt || "🔍 أرسل رقم المحتوى المكون من 5 أرقام:";
-      await sendMessage(chatId, prompt, token, { reply_markup: getUserInlineKeyboard() });
-      await answerCallback(q.id, "", token);
-      return;
-    }
-
-    if (cbData === "contact_us") {
-      const contactMsg = data.texts.contactMessage || data.content?.contactMessage || "📞 <b>للتواصل معنا:</b>\n\nيمكنك التواصل مع الإدارة مباشرة.";
-      const user = data.users[userId] || {};
-      await sendLog(userId, user.username, user.name, "📞 تواصل", "طلب التواصل مع الإدارة", token);
-      await sendMessage(chatId, contactMsg, token, { reply_markup: getUserInlineKeyboard() });
       await answerCallback(q.id, "", token);
       return;
     }
@@ -1186,7 +1165,7 @@ async function handleUpdate(update, env) {
         }
         const welcome = getWelcomeForUser(false, false, true, false);
         await sendMedia(chatId, welcome.mediaType, welcome.mediaFileId, welcome.text, token, {
-          reply_markup: getUserInlineKeyboard(),
+          reply_markup: getUserKeyboard(),
         });
       } else {
         await showForcedSubscription(chatId, userId, token);
@@ -1310,6 +1289,47 @@ async function handleUpdate(update, env) {
       if (!hasPerm) return;
     }
 
+    // ===== الأزرار المخصصة (من keyboard) =====
+    const customBtn = data.buttons?.items?.find(b => b.label === text);
+    if (customBtn) {
+      await sendLog(userId, username, name, "🔘 زر مخصص", `ضغط على زر "${customBtn.label}"`, token);
+      // نرسل رسالة تحتوي على زر شفاف (inline_keyboard) بالرابط
+      const inlineKb = {
+        inline_keyboard: [
+          [{ text: customBtn.label, url: customBtn.url }]
+        ]
+      };
+      // نرسل رسالة جديدة بها الزر الشفاف، ونبقي keyboard موجوداً
+      await sendMessage(chatId, `🔗 <b>${customBtn.label}</b>`, token, {
+        reply_markup: inlineKb,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+      return;
+    }
+
+    // ===== أزرار البحث والتواصل =====
+    if (text === "🔍 البحث عن محتوى") {
+      const canAccess = data.verification.verifiedUsers?.[userId] || !data.verification.enabled;
+      if (!canAccess) {
+        await sendMessage(chatId, data.texts.notVerified || "🔐 يجب إكمال التحقق أولاً.", token);
+        return;
+      }
+      await sendLog(userId, username, name, "🔍 بحث", "بدأ عملية البحث عن محتوى", token);
+      if (!adminState[userId]) adminState[userId] = { action: null, step: null, temp: {} };
+      adminState[userId] = { action: "user_content_search", step: "waiting_id", temp: {} };
+      const prompt = data.texts.searchPrompt || data.content?.searchPrompt || "🔍 أرسل رقم المحتوى المكون من 5 أرقام:";
+      await sendMessage(chatId, prompt, token, { reply_markup: getUserKeyboard() });
+      return;
+    }
+
+    if (text === "📞 تواصل معنا") {
+      const contactMsg = data.texts.contactMessage || data.content?.contactMessage || "📞 <b>للتواصل معنا:</b>\n\nيمكنك التواصل مع الإدارة مباشرة.";
+      await sendLog(userId, username, name, "📞 تواصل", "طلب التواصل مع الإدارة", token);
+      await sendMessage(chatId, contactMsg, token, { reply_markup: getUserKeyboard() });
+      return;
+    }
+
     // معالجة رقم الهاتف (التحقق)
     if (msg.contact) {
       const contact = msg.contact;
@@ -1415,13 +1435,54 @@ ${countryInfo.flag} <b>الدولة:</b> ${countryInfo.name}
       return;
     }
 
+    // ===== بحث المستخدم عن محتوى =====
+    {
+      const uState = adminState[userId];
+      if (uState?.action === "user_content_search" && uState.step === "waiting_id") {
+        const contentId = text.trim();
+        adminState[userId] = { action: null, step: null, temp: {} };
+        const canAccess = data.verification.verifiedUsers?.[userId] || !data.verification.enabled;
+        if (!canAccess) {
+          await sendMessage(chatId, data.texts.notVerified || "🔐 يجب إكمال التحقق أولاً.", token);
+          return;
+        }
+        if (!/^\d{5}$/.test(contentId)) {
+          await sendMessage(chatId, data.texts.contentIdInvalid || "❌ رقم المحتوى يجب أن يكون 5 أرقام بالضبط.\nمثال: <code>10001</code>", token, { reply_markup: getUserKeyboard() });
+          return;
+        }
+        await sendLog(userId, username, name, "📂 عرض محتوى", `عرض المحتوى رقم ${contentId}`, token);
+        await deliverContent(chatId, contentId, token);
+        return;
+      }
+    }
+
+    // الأوامر المخصصة
+    if (text.startsWith("/")) {
+      const cmd = text.substring(1).split(" ")[0];
+      if (data.commands && data.commands[cmd] && data.commands[cmd].enabled) {
+        await sendLog(userId, username, name, "🔹 أمر", "نفّذ /" + cmd, token);
+        const cmdData = data.commands[cmd];
+        if (data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+          await sendMessage(chatId, "❌ هذا الأمر متاح للمستخدمين المحققين فقط.", token);
+          return;
+        }
+        if (cmdData.mediaType && cmdData.mediaFileId) {
+          await sendMedia(chatId, cmdData.mediaType, cmdData.mediaFileId, cmdData.response || cmdData.description, token);
+        } else {
+          await sendMessage(chatId, cmdData.response || "🔹 " + cmdData.description, token);
+        }
+        data.stats.totalCommands = (data.stats.totalCommands || 0) + 1;
+        await saveData(env);
+        return;
+      }
+    }
+
     // أي رسالة غير معروفة
     await sendMessage(chatId, data.texts.unknownCommand || "❓ أمر غير معروف. أرسل /start للبدء.", token, {
-      reply_markup: getUserInlineKeyboard(),
+      reply_markup: getUserKeyboard(),
     });
   }
 }
-
 // ====================================================================
 // ========== معالجة إدخالات الأدمن النصية ==========
 // ====================================================================
@@ -2669,7 +2730,7 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
         return;
       }
       await sendMessage(targetId, "✅ تم قبول طلبك!\n\n" + data.verification.successMessage, token, {
-        reply_markup: getUserInlineKeyboard(),
+        reply_markup: getUserKeyboard(),
       });
       const rc = getCountryFromPhone(user.phone);
       await editMessage(chatId, msgId,
@@ -2740,7 +2801,7 @@ ${user.phone ? `📱 <code>+${String(user.phone).replace(/\D/g,"")}</code>  ${rc
 ${approveCountry.flag} ${approveCountry.name}
 📅 ${formatDate(new Date().toISOString())}`, token);
       await sendMessage(targetId, data.verification.successMessage, token, {
-        reply_markup: getUserInlineKeyboard(),
+        reply_markup: getUserKeyboard(),
       });
     }
     return;
@@ -3113,7 +3174,7 @@ ${rejectCountry.flag} ${rejectCountry.name}
   // ===== النسخ الاحتياطي =====
   if (cbData === "admin_backup") {
     const backup = {
-      version: "2.2",
+      version: "2.3",
       date: new Date().toISOString(),
       users: Object.keys(data.users || {}).length,
       commands: Object.keys(data.commands || {}).length,
