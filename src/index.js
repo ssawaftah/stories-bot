@@ -1385,7 +1385,7 @@ function buildPublishKeyboard(item, botUsername) {
   const bot = botUsername || "niswangybot";
   return {
     inline_keyboard: [
-      [{ text: "📥 فتح المحتوى", url: `https://t.me/${bot}?start=share_${item.id}` }]
+      [{ text: "الفيديو كامل - بوت نسونجي", url: `https://t.me/${bot}?start=share_${item.id}` }]
     ]
   };
 }
@@ -4436,7 +4436,7 @@ ${rejectCountry.flag} ${rejectCountry.name}
     const botUsername = data.content?.botUsername || "niswangybot";
 
     // النص بدون الرابط النصي
-    const publishText = `📌 ${item.title}\n\n🔐 المقطع كامل على @${botUsername}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )`;
+    const publishText = `📌 ${item.title}\n\n🔐 المقطع كامل على @${botUsername}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )\n\nأو ادخل مباشرةً 👇`;
 
     // بناء الزر
     const keyboard = buildPublishKeyboard(item, botUsername);
