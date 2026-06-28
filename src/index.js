@@ -1385,7 +1385,7 @@ function buildPublishKeyboard(item, botUsername) {
   const bot = botUsername || "niswangybot";
   return {
     inline_keyboard: [
-      [{ text: "الفيديو كامل - بوت نسونجي", url: `https://t.me/${bot}?start=share_${item.id}` }]
+      [{ text: "📥 فتح المحتوى", url: `https://t.me/${bot}?start=share_${item.id}` }]
     ]
   };
 }
@@ -1411,7 +1411,7 @@ async function deliverContent(chatId, contentId, token) {
     return false;
   }
   const kb = { reply_markup: getUserKeyboard() };
-  await sendMessage(chatId, `${item.title}\n\nرقم المحتوى:\n<code>${item.id}</code>`, token, kb);
+  await sendMessage(chatId, `<b>${item.title}</b>\n\nرقم المحتوى:\n<code>${item.id}</code>`, token, kb);
   for (let i = 0; i < item.parts.length; i++) {
     const part = item.parts[i];
     // على آخر جزء أو إذا كان هناك جزء واحد فقط — نُبقي الكيبورد دائماً
@@ -1484,6 +1484,16 @@ function generateContentId() {
 
 function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   const w = data.welcome;
+  // إذا كان التحقق مفعلاً والمستخدم غير محقق (وليس معلق ولا مرفوض)، نعرض رسالة التحقق
+  if (data.verification.enabled && !isVerified && !isPending && !isRejected) {
+    return {
+      text: "🔐 <b>مرحباً!</b>\n\nللاستمرار، يرجى التحقق من رقم هاتفك عبر الزر أدناه.",
+      mediaType: null,
+      mediaFileId: null,
+      buttons: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]],
+      userKeyboard: null,
+    };
+  }
   if (isRejected)
     return {
       text: "❌ <b>طلبك مرفوض.</b>\n\nإذا كان لديك استفسار، يرجى التواصل مع الإدارة.",
@@ -1508,15 +1518,12 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
       buttons: null,
       userKeyboard: getUserKeyboard(),
     };
-  const buttons = [];
-  if (isNewUser || (!isVerified && data.verification.enabled)) {
-    buttons.push([{ text: "▶️ بدء الاستخدام", callback_data: "start_use" }]);
-  }
+  // الحالة الافتراضية (لن تصل هنا)
   return {
     text: w.text,
     mediaType: w.mediaType,
     mediaFileId: w.mediaFileId,
-    buttons,
+    buttons: [[{ text: "▶️ بدء الاستخدام", callback_data: "start_use" }]],
     userKeyboard: null,
   };
 }
@@ -1592,6 +1599,18 @@ async function handleUpdate(update, env) {
         true,
       );
       return;
+    }
+
+    // التحقق من صلاحية المستخدم غير الأدمن للكولباك (التحقق مطلوب)
+    if (!isAdmin(userId, env) && data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+      // السماح فقط ببعض الكولباك مثل start_use, check_subscription, fs_link_done_, noop
+      const allowedCallbacks = ["start_use", "check_subscription", "noop"];
+      const isFsLink = cbData.startsWith("fs_link_done_");
+      if (!allowedCallbacks.includes(cbData) && !isFsLink) {
+        await answerCallback(q.id, "🔐 يجب التحقق أولاً.", token, true);
+        return;
+      }
+      // نسمح بمعالجتها طالما هي ضمن المسموح
     }
 
     // ===== الأزرار العامة للمستخدمين =====
@@ -1716,6 +1735,24 @@ async function handleUpdate(update, env) {
     if (!data.settings.botActive && !isAdmin(userId, env)) {
       await sendMessage(chatId, data.settings.stopMessage, token);
       return;
+    }
+
+    // ===== التحقق من صلاحية المستخدم غير الأدمن (التحقق مطلوب) =====
+    if (!isAdmin(userId, env) && data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+      // السماح فقط بـ /start و مشاركة الرقم
+      const isStart = text && text.startsWith("/start");
+      const isContact = !!msg.contact;
+      if (!isStart && !isContact) {
+        // نرسل رسالة تطلب التحقق مع زر
+        const kb = {
+          inline_keyboard: [
+            [{ text: "▶️ بدء التحقق", callback_data: "start_use" }]
+          ]
+        };
+        await sendMessage(chatId, "🔐 يجب عليك التحقق من رقم هاتفك أولاً للاستمرار.", token, { reply_markup: kb });
+        return;
+      }
+      // إذا كان /start أو contact، نسمح بمعالجته لاحقاً
     }
 
     // ===== معالجة إدخالات الأدمن =====
@@ -3152,6 +3189,15 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
   }
   if (cbData === "verif_toggle") {
     data.verification.enabled = !data.verification.enabled;
+    if (data.verification.enabled) {
+      // عند التفعيل، نمسح جميع حالات التحقق السابقة لإجبار الجميع على التحقق
+      data.verification.verifiedUsers = {};
+      data.verification.rejectedUsers = {};
+      data.verification.pendingUsers = {};
+      await sendMessage(chatId, "✅ تم تفعيل التحقق، وسيُطلب من جميع المستخدمين التحقق من جديد.", token);
+    } else {
+      await sendMessage(chatId, "✅ تم تعطيل التحقق، يمكن لجميع المستخدمين استخدام البوت.", token);
+    }
     await saveData(env);
     const m = verificationMenu();
     await editMessage(chatId, msgId, m.text, token, {
@@ -4436,7 +4482,7 @@ ${rejectCountry.flag} ${rejectCountry.name}
     const botUsername = data.content?.botUsername || "niswangybot";
 
     // النص بدون الرابط النصي
-    const publishText = `📌 ${item.title}\n\n🔐 المقطع كامل على @${botUsername}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )\n\nأو ادخل مباشرةً 👇`;
+    const publishText = `📌 ${item.title}\n\n🔐 المقطع كامل على @${botUsername}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )`;
 
     // بناء الزر
     const keyboard = buildPublishKeyboard(item, botUsername);
