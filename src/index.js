@@ -1411,7 +1411,7 @@ async function deliverContent(chatId, contentId, token) {
     return false;
   }
   const kb = { reply_markup: getUserKeyboard() };
-  await sendMessage(chatId, `<b>${item.title}</b>\n\nرقم المحتوى:\n<code>${item.id}</code>`, token, kb);
+  await sendMessage(chatId, `${item.title}\n\nرقم المحتوى:\n<code>${item.id}</code>`, token, kb);
   for (let i = 0; i < item.parts.length; i++) {
     const part = item.parts[i];
     // على آخر جزء أو إذا كان هناك جزء واحد فقط — نُبقي الكيبورد دائماً
