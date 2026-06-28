@@ -3557,7 +3557,8 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
     await editMessage(chatId, msgId, m.text, token, { reply_markup: m.keyboard });
     return;
   }
-
+{
   // ===== أي كولباك غير معروف =====
   await sendMessage(chatId, "⚠️ خيار غير معروف أو منتهي الصلاحية. افتح لوحة التحكم من جديد.", token);
 // نهاية handleAdminCallback
+}
