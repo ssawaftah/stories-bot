@@ -3559,4 +3559,4 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
 
   // ===== أي كولباك غير معروف =====
   await sendMessage(chatId, "⚠️ خيار غير معروف أو منتهي الصلاحية. افتح لوحة التحكم من جديد.", token);
-} // نهاية handleAdminCallback
+// نهاية handleAdminCallback
