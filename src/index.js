@@ -1380,17 +1380,25 @@ function contentDetailMenu(id) {
   };
 }
 
-function buildPublishText(item, botUsername) {
+// دالة بناء الزر
+function buildPublishKeyboard(item, botUsername) {
   const bot = botUsername || "niswangybot";
-  return `📌 ${item.title}
-
-🔐 المقطع كامل على @${bot}
-ادخل للبوت ثم اضغط زر 🔍 البحث واكتب:
-( ${item.id} )
-
-أو ادخل مباشرةً 👇
-https://t.me/${bot}?start=share_${item.id}`;
+  const url = `https://t.me/${bot}?start=share_${item.id}`;
+  return {
+    inline_keyboard: [
+      [{ text: "📥 فتح المحتوى", url: url }]
+    ]
+  };
 }
+
+// عند الإرسال
+const text = `📌 ${item.title}\n\n🔐 المقطع كامل على @${bot}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )`;
+const keyboard = buildPublishKeyboard(item, botUsername);
+
+await sendMessage(chatId, text, token, {
+  reply_markup: keyboard,
+  parse_mode: "HTML"
+});
 
 async function deliverContent(chatId, contentId, token) {
   const item = data.content?.items?.[contentId];
