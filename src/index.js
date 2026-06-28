@@ -1487,7 +1487,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   // إذا كان التحقق مفعلاً والمستخدم غير محقق (وليس معلق ولا مرفوض)، نعرض رسالة التحقق
   if (data.verification.enabled && !isVerified && !isPending && !isRejected) {
     return {
-      text: "🔐 <b>مرحباً!</b>\n\nللاستمرار، يرجى التحقق من رقم هاتفك عبر الزر أدناه.",
+      text: "🔐 يجب إكمال التحقق أولاً للوصول للمحتوى.",
       mediaType: null,
       mediaFileId: null,
       buttons: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]],
