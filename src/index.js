@@ -725,7 +725,7 @@ async function checkUserPermissions(userId, chatId, token, env) {
         [{ text: "▶️ بدء التحقق", callback_data: "start_use" }]
       ]
     };
-    await sendMessage(chatId, "✨ أهلاً بك!/n/n🔐 للدخول إلى البوت، يرجى تأكيد أنك لست روبوتًا بالضغط على زر «بدء التحقق» أدناه.", token, { reply_markup: kb });
+    await sendMessage(chatId, "✨ أهلاً بك!\n\n🔐 للدخول إلى البوت، يرجى تأكيد أنك لست روبوتًا بالضغط على زر «بدء التحقق» أدناه.", token, { reply_markup: kb });
     return false;
   }
 
@@ -1519,7 +1519,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   // إذا كان التحقق مفعلاً والمستخدم غير محقق (وليس معلق ولا مرفوض)، نعرض رسالة التحقق
   if (data.verification.enabled && !isVerified && !isPending && !isRejected) {
     return {
-      text: "✨ أهلاً بك!/n/n🔐 للدخول إلى البوت، يرجى تأكيد أنك لست روبوتًا بالضغط على زر «بدء التحقق» أدناه.",
+      text: "✨ أهلاً بك!\n\n🔐 للدخول إلى البوت، يرجى تأكيد أنك لست روبوتًا بالضغط على زر «بدء التحقق» أدناه.",
       mediaType: null,
       mediaFileId: null,
       buttons: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]],
