@@ -1380,6 +1380,16 @@ function contentDetailMenu(id) {
   };
 }
 
+// ========== دوال النشر مع زر ==========
+function buildPublishKeyboard(item, botUsername) {
+  const bot = botUsername || "niswangybot";
+  return {
+    inline_keyboard: [
+      [{ text: "📥 فتح المحتوى", url: `https://t.me/${bot}?start=share_${item.id}` }]
+    ]
+  };
+}
+
 function buildPublishText(item, botUsername) {
   const bot = botUsername || "niswangybot";
   return `📌 ${item.title}
@@ -4410,24 +4420,34 @@ ${rejectCountry.flag} ${rejectCountry.name}
     return;
   }
 
-  // ===== نشر على القناة =====
+  // ===== نشر على القناة (مع زر) =====
   if (cbData.startsWith("cnt_publish_")) {
     const id = cbData.replace("cnt_publish_", "");
     const item = data.content?.items?.[id];
-    if (!item) { await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token); return; }
+    if (!item) {
+      await sendMessage(chatId, "⚠️ المحتوى غير موجود.", token);
+      return;
+    }
     const channelId = data.content?.publishChannel;
     if (!channelId) {
       await sendMessage(chatId, "❌ لم يتم تعيين قناة النشر.\nاذهب لـ إدارة المحتوى → تعيين قناة النشر.", token);
       return;
     }
     const botUsername = data.content?.botUsername || "niswangybot";
-    const publishText = buildPublishText(item, botUsername);
-    const res = await telegramRequest("sendMessage", token, {
-      chat_id: channelId,
-      text: publishText,
+
+    // النص بدون الرابط النصي
+    const publishText = `📌 ${item.title}\n\n🔐 المقطع كامل على @${botUsername}\nادخل للبوت ثم اضغط زر 🔍 البحث واكتب:\n( ${item.id} )`;
+
+    // بناء الزر
+    const keyboard = buildPublishKeyboard(item, botUsername);
+
+    // إرسال الرسالة مع الزر
+    const res = await sendMessage(channelId, publishText, token, {
+      reply_markup: keyboard,
       parse_mode: "HTML",
       disable_web_page_preview: false,
     });
+
     if (res.ok) {
       item.status = "published";
       item.publishedAt = new Date().toISOString();
@@ -4453,7 +4473,7 @@ ${rejectCountry.flag} ${rejectCountry.name}
     return;
   }
 
-  // ===== تأكيد حذف المحتوى (يجب أن يكون قبل cnt_delete_ العام) =====
+  // ===== تأكيد حذف المحتوى =====
   if (cbData.startsWith("cnt_delete_confirm_")) {
     const id = cbData.replace("cnt_delete_confirm_", "");
     if (data.content?.items?.[id]) {
