@@ -521,8 +521,8 @@ function checkAntiSpam(userId) {
 async function checkForcedSubscription(userId, token) {
   const fs = data.forcedSubscription;
   if (!fs.enabled || !fs.list || fs.list.length === 0) return true;
-  if (fs.userStatus && fs.userStatus[userId] && fs.userStatus[userId].completed)
-    return true;
+  // لا نعتمد على الذاكرة المخزنة للتأكد من الاشتراك الفعلي في كل مرة
+  // if (fs.userStatus && fs.userStatus[userId] && fs.userStatus[userId].completed) return true;
   const activeSubs = fs.list.filter((s) => s.enabled !== false);
   if (activeSubs.length === 0) return true;
   let allSubscribed = true;
@@ -534,9 +534,14 @@ async function checkForcedSubscription(userId, token) {
     }
   }
   if (allSubscribed) {
+    // نحدث الحالة للتسجيل فقط
     if (!fs.userStatus) fs.userStatus = {};
     fs.userStatus[userId] = { completed: true, timestamp: Date.now() };
     return true;
+  }
+  // إذا لم يكن مشتركاً، نمسح حالته المخزنة
+  if (fs.userStatus && fs.userStatus[userId]) {
+    delete fs.userStatus[userId];
   }
   return false;
 }
@@ -705,6 +710,33 @@ function recordActivity(userId) {
     data.stats.dailyActive[key][userId] = true;
   }
   data.stats.totalMessages = (data.stats.totalMessages || 0) + 1;
+}
+
+// ===== دالة التحقق من صلاحيات المستخدم (التحقق + الاشتراك) =====
+async function checkUserPermissions(userId, chatId, token, env) {
+  // الأدمن معفى من كل القيود
+  if (isAdmin(userId, env)) return true;
+
+  // 1. فحص التحقق (إذا كان مفعلاً)
+  if (data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+    // نرسل رسالة تطلب التحقق مع زر
+    const kb = {
+      inline_keyboard: [
+        [{ text: "▶️ بدء التحقق", callback_data: "start_use" }]
+      ]
+    };
+    await sendMessage(chatId, "🔐 يجب عليك التحقق من رقم هاتفك أولاً للاستمرار.", token, { reply_markup: kb });
+    return false;
+  }
+
+  // 2. فحص الاشتراك الإجباري
+  const fsOk = await checkForcedSubscription(userId, token);
+  if (!fsOk) {
+    await showForcedSubscription(chatId, userId, token);
+    return false;
+  }
+
+  return true;
 }
 
 // ====================================================================
@@ -1487,7 +1519,7 @@ function getWelcomeForUser(isNewUser, isPending, isVerified, isRejected) {
   // إذا كان التحقق مفعلاً والمستخدم غير محقق (وليس معلق ولا مرفوض)، نعرض رسالة التحقق
   if (data.verification.enabled && !isVerified && !isPending && !isRejected) {
     return {
-      text: "🔐 يجب إكمال التحقق أولاً للوصول للمحتوى.",
+      text: "🔐 <b>مرحباً!</b>\n\nللاستمرار، يرجى التحقق من رقم هاتفك عبر الزر أدناه.",
       mediaType: null,
       mediaFileId: null,
       buttons: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]],
@@ -1601,16 +1633,20 @@ async function handleUpdate(update, env) {
       return;
     }
 
-    // التحقق من صلاحية المستخدم غير الأدمن للكولباك (التحقق مطلوب)
-    if (!isAdmin(userId, env) && data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
-      // السماح فقط ببعض الكولباك مثل start_use, check_subscription, fs_link_done_, noop
-      const allowedCallbacks = ["start_use", "check_subscription", "noop"];
-      const isFsLink = cbData.startsWith("fs_link_done_");
-      if (!allowedCallbacks.includes(cbData) && !isFsLink) {
-        await answerCallback(q.id, "🔐 يجب التحقق أولاً.", token, true);
+    // التحقق من صلاحية المستخدم غير الأدمن (التحقق + الاشتراك)
+    // نستثني الكولباك التي تتعامل مباشرة مع الاشتراك والتحقق
+    const allowedCallbacks = ["start_use", "check_subscription", "noop"];
+    const isFsLink = cbData.startsWith("fs_link_done_");
+    const isVerifApproveReject = cbData.startsWith("verif_approve_") || cbData.startsWith("verif_reject_");
+    const isVerifReapprove = cbData.startsWith("verif_reapprove_");
+    // للأدمن نسمح بكل شيء
+    if (!isAdmin(userId, env) && !allowedCallbacks.includes(cbData) && !isFsLink && !isVerifApproveReject && !isVerifReapprove) {
+      // نفحص الصلاحيات
+      const hasPerm = await checkUserPermissions(userId, chatId, token, env);
+      if (!hasPerm) {
+        await answerCallback(q.id, "", token);
         return;
       }
-      // نسمح بمعالجتها طالما هي ضمن المسموح
     }
 
     // ===== الأزرار العامة للمستخدمين =====
@@ -1624,12 +1660,14 @@ async function handleUpdate(update, env) {
         "بدأ المستخدم استخدام البوت",
         token,
       );
+      // فحص الاشتراك أولاً (حتى قبل التحقق)
       const fsOk = await checkForcedSubscription(userId, token);
       if (!fsOk) {
         await showForcedSubscription(chatId, userId, token);
         await answerCallback(q.id, "", token);
         return;
       }
+      // ثم التحقق
       if (data.verification.enabled) {
         await sendMessage(chatId, data.verification.requestMessage, token, {
           reply_markup: {
@@ -1652,6 +1690,20 @@ async function handleUpdate(update, env) {
     if (cbData === "check_subscription") {
       const fsOk = await checkForcedSubscription(userId, token);
       if (fsOk) {
+        // بعد الاشتراك، نتحقق إذا كان التحقق مطلوباً
+        if (data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+          await sendMessage(chatId, data.verification.requestMessage, token, {
+            reply_markup: {
+              keyboard: [
+                [{ text: data.verification.buttonText, request_contact: true }],
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
+          });
+          await answerCallback(q.id, "", token);
+          return;
+        }
         const welcome = getWelcomeForUser(false, false, true, false);
         await sendMedia(chatId, welcome.mediaType, welcome.mediaFileId, welcome.text, token, {
           reply_markup: getUserKeyboard(),
@@ -1681,6 +1733,20 @@ async function handleUpdate(update, env) {
       const fsOk = await checkForcedSubscription(userId, token);
       if (fsOk) {
         await saveData(env);
+        // بعد الاشتراك، نتحقق إذا كان التحقق مطلوباً
+        if (data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
+          await sendMessage(chatId, data.verification.requestMessage, token, {
+            reply_markup: {
+              keyboard: [
+                [{ text: data.verification.buttonText, request_contact: true }],
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
+          });
+          await answerCallback(q.id, "", token);
+          return;
+        }
         const welcome = getWelcomeForUser(false, false, true, false);
         await sendMedia(
           chatId,
@@ -1735,24 +1801,6 @@ async function handleUpdate(update, env) {
     if (!data.settings.botActive && !isAdmin(userId, env)) {
       await sendMessage(chatId, data.settings.stopMessage, token);
       return;
-    }
-
-    // ===== التحقق من صلاحية المستخدم غير الأدمن (التحقق مطلوب) =====
-    if (!isAdmin(userId, env) && data.verification.enabled && !data.verification.verifiedUsers?.[userId]) {
-      // السماح فقط بـ /start و مشاركة الرقم
-      const isStart = text && text.startsWith("/start");
-      const isContact = !!msg.contact;
-      if (!isStart && !isContact) {
-        // نرسل رسالة تطلب التحقق مع زر
-        const kb = {
-          inline_keyboard: [
-            [{ text: "▶️ بدء التحقق", callback_data: "start_use" }]
-          ]
-        };
-        await sendMessage(chatId, "🔐 يجب عليك التحقق من رقم هاتفك أولاً للاستمرار.", token, { reply_markup: kb });
-        return;
-      }
-      // إذا كان /start أو contact، نسمح بمعالجته لاحقاً
     }
 
     // ===== معالجة إدخالات الأدمن =====
@@ -1822,6 +1870,17 @@ async function handleUpdate(update, env) {
         "أرسل: " + text.substring(0, 100),
         token,
       );
+    }
+
+    // ===== التحقق من صلاحيات المستخدم (التحقق + الاشتراك) =====
+    // نستثني /start ومشاركة الرقم لأنها تبدأ عملية التحقق
+    const isStart = text && text.startsWith("/start");
+    const isContact = !!msg.contact;
+    if (!isStart && !isContact) {
+      const hasPerm = await checkUserPermissions(userId, chatId, token, env);
+      if (!hasPerm) {
+        return;
+      }
     }
 
     // معالجة رقم الهاتف (التحقق)
@@ -1924,24 +1983,18 @@ ${countryInfo.flag} <b>الدولة:</b> ${countryInfo.name}
       // معالجة رابط المحتوى المباشر: /start share_XXXXX
       if (param.startsWith("share_")) {
         const contentId = param.replace("share_", "");
-        const canAccess = isVerified || !data.verification.enabled;
-        if (!canAccess) {
-          await sendMessage(chatId, "🔐 يجب إكمال التحقق أولاً للوصول للمحتوى.", token, {
-            reply_markup: { inline_keyboard: [[{ text: "▶️ بدء التحقق", callback_data: "start_use" }]] },
-          });
-          return;
-        }
+        // فحص الصلاحيات
+        const hasPerm = await checkUserPermissions(userId, chatId, token, env);
+        if (!hasPerm) return;
         await deliverContent(chatId, contentId, token);
         return;
       }
 
-      // فحص الاشتراك الإجباري للمستخدمين المسجلين والمحققين
-      if (!isNewUser && (isVerified || !data.verification.enabled) && !isPending && !isRejected) {
-        const fsOk = await checkForcedSubscription(userId, token);
-        if (!fsOk) {
-          await showForcedSubscription(chatId, userId, token);
-          return;
-        }
+      // فحص الاشتراك الإجباري أولاً (حتى قبل الترحيب)
+      const fsOk = await checkForcedSubscription(userId, token);
+      if (!fsOk) {
+        await showForcedSubscription(chatId, userId, token);
+        return;
       }
 
       const welcome = getWelcomeForUser(isNewUser, isPending, isVerified, isRejected);
@@ -3367,6 +3420,13 @@ async function handleAdminCallback(userId, cbData, chatId, msgId, token, env) {
       };
       delete data.verification.rejectedUsers[targetId];
       await saveData(env);
+      // بعد القبول، نفحص الاشتراك الإجباري
+      const fsOk = await checkForcedSubscription(targetId, token);
+      if (!fsOk) {
+        await showForcedSubscription(chatId, targetId, token);
+        await editMessage(chatId, msgId, `✅ تم قبول المستخدم، لكن يجب إكمال الاشتراك أولاً.`, token);
+        return;
+      }
       await sendMessage(targetId, "✅ تم قبول طلبك!\n\n" + data.verification.successMessage, token, {
         reply_markup: getUserKeyboard(),
       });
@@ -3429,6 +3489,13 @@ ${user.phone ? `📱 <code>+${String(user.phone).replace(/\D/g,"")}</code>  ${rc
       delete data.verification.pendingUsers[targetId];
       await saveData(env);
       const approveCountry = getCountryFromPhone(user.phone);
+      // بعد القبول، نفحص الاشتراك الإجباري
+      const fsOk = await checkForcedSubscription(targetId, token);
+      if (!fsOk) {
+        await showForcedSubscription(chatId, targetId, token);
+        await editMessage(chatId, msgId, `✅ تم قبول المستخدم، لكن يجب إكمال الاشتراك أولاً.`, token);
+        return;
+      }
       await editMessage(chatId, msgId,
 `✅ <b>تم قبول المستخدم</b>
 ━━━━━━━━━━━━━━━━━━━━
